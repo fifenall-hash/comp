@@ -292,10 +292,13 @@
         ).join('');
     }
 
-    // --- 1단계: 데이터 가져오기 및 결측치 완벽 정제 ---
     async function fetchRawData(ticker) {
         try {
-            const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=max`;
+            // 💡 야후의 데이터 압축 우회: range=max 대신 아주 오래전 시간부터 현재까지를 직접 지정하여 일별 데이터 강제 획득
+            const now = Math.floor(Date.now() / 1000);
+            const past = -2208988800; // 1900년 1월 1일 (가장 먼 과거 지정)
+            const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?period1=${past}&period2=${now}&interval=1d`;
+            
             const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`;
 
             const response = await fetch(proxyUrl);
@@ -309,7 +312,6 @@
 
             const rawTimestamps = resultObj.timestamp || [];
             
-            // 수정종가(adjclose)가 존재하면 우선 적용, 없으면 일반 종가 적용
             let rawPrices = [];
             if (resultObj.indicators.adjclose && resultObj.indicators.adjclose[0].adjclose) {
                 rawPrices = resultObj.indicators.adjclose[0].adjclose;
@@ -320,7 +322,6 @@
             const cleanTimestamps = [];
             const cleanPrices = [];
 
-            // 💡 데이터 정제(Cleansing): null, undefined, NaN, 0 이하인 쓰레기값을 날짜와 함께 동반 삭제
             for (let i = 0; i < rawTimestamps.length; i++) {
                 const price = rawPrices[i];
                 if (price !== null && price !== undefined && typeof price === 'number' && price > 0) {
@@ -329,7 +330,6 @@
                 }
             }
 
-            // 정제 후 남은 데이터가 없으면 에러 처리
             if (cleanTimestamps.length === 0) {
                 throw new Error("유효한 가격 데이터가 없습니다.");
             }
@@ -337,8 +337,8 @@
             return {
                 ticker,
                 stockName,
-                timestamps: cleanTimestamps, // 오염되지 않은 깨끗한 날짜 배열
-                closePrices: cleanPrices,    // 오염되지 않은 깨끗한 가격 배열 (1:1 매칭 완료)
+                timestamps: cleanTimestamps, 
+                closePrices: cleanPrices,   
                 error: false
             };
         } catch (err) {
@@ -347,7 +347,6 @@
         }
     }
 
-    // --- 2단계: 메인 프로세스 (비교하기) ---
     async function processComparison(mode) {
         if (tickers.length === 0) {
             alert('비교할 티커를 최소 1개 이상 입력해주세요.');
@@ -372,7 +371,6 @@
             let commonStartTime = -1;
 
             if (mode === 'same') {
-                // 이미 정제된 데이터의 0번째 인덱스가 완벽한 '최초 유효 날짜'입니다.
                 const validFirstTimes = rawDataArray.filter(d => !d.error).map(d => d.timestamps[0]);
                 if (validFirstTimes.length > 0) {
                     commonStartTime = Math.max(...validFirstTimes); 
@@ -422,7 +420,6 @@
         }
     }
 
-    // --- 3단계: 연산 엔진 (이미 정제된 무결점 데이터만 수신함) ---
     function calculateMetrics(raw, commonStartTime) {
         if (raw.error) return { ticker: raw.ticker, error: true };
 
@@ -431,14 +428,12 @@
 
         let firstIdx = 0;
         
-        // 공통 시작일이 지정된 경우, 해당 날짜 이후부터 분석 시작
         if (commonStartTime !== -1) {
             while (firstIdx < timestamps.length && timestamps[firstIdx] < commonStartTime) {
                 firstIdx++;
             }
         }
 
-        // 인덱스 초과 시 에러 반환 (예: 상장일이 너무 늦어 같은 구간 데이터가 아예 없는 경우)
         if (firstIdx >= closePrices.length) return { ticker: raw.ticker, error: true }; 
 
         const lastIdx = closePrices.length - 1;
@@ -461,7 +456,6 @@
         const chartLabels = [];
         const chartDataPoints = [];
 
-        // 데이터가 이미 정제되었으므로 null 체크 없이 곧바로 고속 연산 돌입
         for (let i = firstIdx; i <= lastIdx; i++) {
             const price = closePrices[i];
             const time = timestamps[i];
@@ -564,6 +558,7 @@
                     display: true,
                     content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
                     position: { x: chartData.top2.labelAlign, y: 'start' },
+                    yAdjust: 32, // 💡 1위 라벨과 겹치지 않게 밑으로 32픽셀 이동
                     color: 'black',
                     backgroundColor: 'rgba(255, 255, 255, 0.7)',
                     font: { size: 13, weight: 'bold' }
