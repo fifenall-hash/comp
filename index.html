@@ -16,13 +16,16 @@
             --box-bg: #ffffff;
             --danger-color: #e74c3c;
             --btn-color: #34495e;
+            --same-color: #8e44ad;
+            --same-hover: #9b59b6;
         }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: var(--bg-color);
             color: #333;
-            max-width: 1100px;
-            margin: 40px auto;
+            /* 모바일에서 테이블이 커질 때 바디 전체가 자연스럽게 스크롤 되도록 허용 */
+            overflow-x: auto;
+            margin: 0;
             padding: 20px;
         }
         .container {
@@ -30,6 +33,12 @@
             padding: 30px;
             border-radius: 10px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            
+            /* 핵심 CSS: 테이블 길이에 맞춰 컨테이너와 입력창이 같이 늘어나도록 설정 */
+            width: fit-content;
+            min-width: 100%;
+            box-sizing: border-box;
+            margin: 0 auto;
         }
         h1 { text-align: center; color: #2c3e50; }
         
@@ -62,7 +71,7 @@
             border-radius: 5px;
             text-transform: uppercase;
         }
-        button {
+        .add-btn {
             padding: 12px 20px;
             font-size: 16px;
             color: white;
@@ -71,15 +80,41 @@
             border-radius: 5px;
             cursor: pointer;
             transition: background 0.3s;
+            white-space: nowrap;
         }
-        button:hover { background-color: var(--hover-color); }
+        .add-btn:hover { background-color: var(--hover-color); }
         
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .action-btn {
+            flex: 1;
+            padding: 15px;
+            font-size: 16px;
+            font-weight: bold;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+            white-space: nowrap;
+        }
+        .btn-full { background-color: #2980b9; }
+        .btn-full:hover { background-color: #2471a3; }
+        .btn-same { background-color: var(--same-color); }
+        .btn-same:hover { background-color: var(--same-hover); }
+
         .chart-btn {
             background-color: var(--btn-color);
+            color: white;
+            border: none;
             padding: 6px 12px;
             font-size: 13px;
             margin-left: 8px;
             border-radius: 4px;
+            cursor: pointer;
         }
         .chart-btn:hover { background-color: #2c3e50; }
 
@@ -105,19 +140,15 @@
             margin-left: 5px;
             font-weight: bold;
         }
-        #compareBtn {
-            width: 100%;
-            background-color: #2980b9;
-        }
-        #compareBtn:hover { background-color: #2471a3; }
+        
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 20px;
             font-size: 15px;
+            white-space: nowrap; /* 표 안의 글씨가 뭉개지지 않고 넓이를 유지하게 함 */
         }
         th, td {
-            padding: 12px;
+            padding: 12px 15px;
             text-align: right;
             border-bottom: 1px solid #ddd;
             vertical-align: middle;
@@ -129,9 +160,10 @@
             font-weight: bold;
             color: #e67e22;
             margin-top: 20px;
+            margin-bottom: 20px;
             display: none;
         }
-        .highlight-cagr { color: var(--primary-color); font-weight: bold; }
+        .highlight-cagr { color: var(--primary-color); font-weight: bold; font-size: 1.1em;}
         .highlight-drawdown { color: var(--danger-color); font-weight: bold; display: flex; align-items: center; justify-content: flex-end; }
         
         /* 모달 팝업 스타일 */
@@ -168,19 +200,22 @@
     <h1>📈 주식 CAGR & 최장 물림구간 비교</h1>
     
     <div class="example-info">
-        💡 <strong>예시:</strong> SK하이닉스는 <code>000660.KS</code>, 삼성전자는 <code>005930.KS</code>, 비트코인은 <code>BTC-KRW</code> 형식으로 입력해 주세요.
+        💡 <strong>예시:</strong> SK하이닉스는 <code>000660.KS</code>, 삼성전자는 <code>005930.KS</code>, 비트코인은 <code>BTC-KRW</code>
     </div>
     
     <div class="input-group">
-        <input type="text" id="tickerInput" placeholder="티커 입력 (예: QQQ, TQQQ, BTC-KRW)" onkeypress="handleKeyPress(event)">
-        <button onclick="addTicker()">추가하기</button>
+        <input type="text" id="tickerInput" placeholder="티커 입력 (예: QQQ, TQQQ)" onkeypress="handleKeyPress(event)">
+        <button class="add-btn" onclick="addTicker()">추가하기</button>
     </div>
 
     <div class="ticker-list-container" id="tickerList"></div>
 
-    <button id="compareBtn" onclick="compareTickers()">비교하기</button>
+    <div class="button-group">
+        <button id="btnFull" class="action-btn btn-full" onclick="processComparison('full')">전체 구간 비교하기</button>
+        <button id="btnSame" class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
+    </div>
 
-    <div class="loading" id="loadingIndicator">데이터를 분석 중입니다... ⏳</div>
+    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다... ⏳</div>
 
     <table id="resultTable" style="display: none;">
         <thead>
@@ -243,26 +278,77 @@
         ).join('');
     }
 
-    async function compareTickers() {
+    // 1단계: 야후에서 원본 데이터만 가져오는 함수
+    async function fetchRawData(ticker) {
+        try {
+            const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=max`;
+            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`;
+
+            const response = await fetch(proxyUrl);
+            if (!response.ok) throw new Error(`응답 오류: ${response.status}`);
+            
+            const data = await response.json();
+            const resultObj = data.chart.result[0];
+            
+            const metaInfo = resultObj.meta;
+            const stockName = metaInfo.shortName || metaInfo.longName || ticker;
+
+            return {
+                ticker,
+                stockName,
+                timestamps: resultObj.timestamp,
+                closePrices: resultObj.indicators.quote[0].close,
+                error: false
+            };
+        } catch (err) {
+            console.error(`${ticker} 에러:`, err);
+            return { ticker, error: true };
+        }
+    }
+
+    // 비교하기 버튼 클릭 시 메인 로직 처리
+    async function processComparison(mode) {
         if (tickers.length === 0) {
             alert('비교할 티커를 최소 1개 이상 입력해주세요.');
             return;
         }
 
-        const btn = document.getElementById('compareBtn');
+        const btnFull = document.getElementById('btnFull');
+        const btnSame = document.getElementById('btnSame');
         const loading = document.getElementById('loadingIndicator');
         const table = document.getElementById('resultTable');
         const tbody = document.getElementById('resultBody');
 
-        btn.disabled = true;
+        btnFull.disabled = true;
+        btnSame.disabled = true;
         loading.style.display = 'block';
         table.style.display = 'none';
         tbody.innerHTML = '';
         chartDataStore = {}; 
 
         try {
-            const results = await Promise.all(tickers.map(fetchAndCalculate));
+            // 모든 티커의 데이터를 병렬로 다운로드
+            const rawDataArray = await Promise.all(tickers.map(fetchRawData));
             
+            let commonStartTime = -1;
+
+            // '같은 구간 비교하기'인 경우, 가장 늦게 시작된 날짜를 찾음
+            if (mode === 'same') {
+                const validFirstTimes = rawDataArray.filter(d => !d.error).map(d => {
+                    let idx = 0;
+                    while (idx < d.closePrices.length && d.closePrices[idx] === null) idx++;
+                    return d.timestamps[idx]; // 해당 종목의 최초 유효 날짜
+                });
+                
+                if (validFirstTimes.length > 0) {
+                    commonStartTime = Math.max(...validFirstTimes); // 가장 늦은 날짜 추출
+                }
+            }
+
+            // 계산 함수에 데이터를 넘겨 결과 산출
+            const results = rawDataArray.map(raw => calculateMetrics(raw, commonStartTime));
+
+            // 결과 화면 그리기
             results.forEach(res => {
                 if(res.error) {
                     tbody.innerHTML += `<tr><td><strong>${res.ticker}</strong></td><td colspan="6" style="text-align:center; color:red;">데이터를 불러올 수 없습니다.</td></tr>`;
@@ -271,7 +357,7 @@
                 
                 const cagrPercent = (res.cagr * 100).toFixed(2);
                 const yearsStr = (res.top1.days / 365.2425).toFixed(2);
-                const periodStr = `${res.top1.startStr} ~ <br>${res.top1.endStr}`;
+                const periodStr = res.top1.days > 0 ? `${res.top1.startStr} ~ <br>${res.top1.endStr}` : '-';
                 
                 tbody.innerHTML += `
                     <tr>
@@ -284,7 +370,7 @@
                         <td>${res.daysDiff.toLocaleString()} 일</td>
                         <td>
                             <div class="highlight-drawdown">
-                                ${yearsStr}년 (${Math.round(res.top1.days).toLocaleString()} 일)
+                                ${res.top1.days > 0 ? `${yearsStr}년 (${Math.round(res.top1.days).toLocaleString()} 일)` : '0년'}
                                 <button class="chart-btn" onclick="openChartModal('${res.ticker}')">[차트]</button>
                             </div>
                         </td>
@@ -298,109 +384,111 @@
             alert('오류가 발생했습니다.');
             console.error(error);
         } finally {
-            btn.disabled = false;
+            btnFull.disabled = false;
+            btnSame.disabled = false;
             loading.style.display = 'none';
         }
     }
 
-    async function fetchAndCalculate(ticker) {
-        try {
-            const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=max`;
-            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`;
+    // 2단계: 기준 날짜(commonStartTime)를 받아 지표와 차트 데이터를 계산하는 엔진
+    function calculateMetrics(raw, commonStartTime) {
+        if (raw.error) return { ticker: raw.ticker, error: true };
 
-            const response = await fetch(proxyUrl);
-            if (!response.ok) throw new Error(`응답 오류: ${response.status}`);
-            
-            const data = await response.json();
-            const resultObj = data.chart.result[0];
-            
-            // API의 meta 데이터에서 종목 전체 이름(Full Name) 추출
-            const metaInfo = resultObj.meta;
-            const stockName = metaInfo.shortName || metaInfo.longName || ticker;
+        const timestamps = raw.timestamps;
+        const closePrices = raw.closePrices;
 
-            const timestamps = resultObj.timestamp;
-            const closePrices = resultObj.indicators.quote[0].close;
-
-            let firstIdx = 0;
-            while (firstIdx < closePrices.length && closePrices[firstIdx] === null) { firstIdx++; }
-
-            let lastIdx = closePrices.length - 1;
-            while (lastIdx >= 0 && closePrices[lastIdx] === null) { lastIdx--; }
-
-            const firstTime = timestamps[firstIdx]; 
-            const lastTime = timestamps[lastIdx];
-            const firstPrice = closePrices[firstIdx];
-            const lastPrice = closePrices[lastIdx];
-
-            const daysDiff = (lastTime - firstTime) / 86400;
-            const cagr = Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1;
-
-            let drawdowns = [];
-            let currentPeakPrice = -1;
-            let currentPeakTime = -1;
-            let currentDrawdownMaxDays = 0;
-            let currentDrawdownLastTime = -1;
-
-            const chartLabels = [];
-            const chartDataPoints = [];
-
-            for (let i = firstIdx; i <= lastIdx; i++) {
-                const price = closePrices[i];
-                const time = timestamps[i];
-                if (price === null) continue;
-
-                chartLabels.push(new Date(time * 1000).toISOString().split('T')[0]);
-                chartDataPoints.push(price);
-
-                if (price >= currentPeakPrice) {
-                    if (currentPeakTime !== -1 && currentDrawdownMaxDays > 0) {
-                        drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
-                    }
-                    currentPeakPrice = price;
-                    currentPeakTime = time;
-                    currentDrawdownMaxDays = 0;
-                    currentDrawdownLastTime = time;
-                } else {
-                    const days = (time - currentPeakTime) / 86400;
-                    currentDrawdownMaxDays = days;
-                    currentDrawdownLastTime = time;
-                }
+        let firstIdx = 0;
+        
+        // 공통 시작일이 지정된 경우, 해당 날짜 이후부터 계산 시작
+        if (commonStartTime !== -1) {
+            while (firstIdx < timestamps.length && timestamps[firstIdx] < commonStartTime) {
+                firstIdx++;
             }
-            
-            if (currentDrawdownMaxDays > 0) {
-                drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
-            }
-
-            drawdowns.sort((a, b) => b.days - a.days);
-
-            const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
-            const top2 = drawdowns[1] || { start: firstTime, end: firstTime, days: 0 };
-
-            top1.startStr = new Date(top1.start * 1000).toISOString().split('T')[0];
-            top1.endStr = new Date(top1.end * 1000).toISOString().split('T')[0];
-            top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
-            top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
-
-            const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
-            const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
-
-            chartDataStore[ticker] = {
-                labels: chartLabels,
-                dataPoints: chartDataPoints,
-                stockName: stockName,
-                top1: top1,
-                top2: top2
-            };
-
-            return {
-                ticker, stockName, firstDateStr, lastDateStr, firstPrice, lastPrice,
-                daysDiff: Math.round(daysDiff), cagr,
-                top1, error: false
-            };
-        } catch (err) {
-            console.error(`${ticker} 에러:`, err);
-            return { ticker, error: true };
         }
+        
+        // 유효한 첫 가격을 찾음 (null 무시)
+        while (firstIdx < closePrices.length && closePrices[firstIdx] === null) { 
+            firstIdx++; 
+        }
+
+        let lastIdx = closePrices.length - 1;
+        while (lastIdx >= 0 && closePrices[lastIdx] === null) { lastIdx--; }
+
+        if (firstIdx >= closePrices.length || firstIdx >= lastIdx) {
+             return { ticker: raw.ticker, error: true }; // 데이터가 부족할 경우
+        }
+
+        const firstTime = timestamps[firstIdx]; 
+        const lastTime = timestamps[lastIdx];
+        const firstPrice = closePrices[firstIdx];
+        const lastPrice = closePrices[lastIdx];
+
+        const daysDiff = (lastTime - firstTime) / 86400;
+        const cagr = daysDiff > 0 ? Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1 : 0;
+
+        let drawdowns = [];
+        let currentPeakPrice = -1;
+        let currentPeakTime = -1;
+        let currentDrawdownMaxDays = 0;
+        let currentDrawdownLastTime = -1;
+
+        const chartLabels = [];
+        const chartDataPoints = [];
+
+        // 계산 및 차트 데이터 수집은 지정된 firstIdx부터만 수행!
+        for (let i = firstIdx; i <= lastIdx; i++) {
+            const price = closePrices[i];
+            const time = timestamps[i];
+            if (price === null) continue;
+
+            chartLabels.push(new Date(time * 1000).toISOString().split('T')[0]);
+            chartDataPoints.push(price);
+
+            if (price >= currentPeakPrice) {
+                if (currentPeakTime !== -1 && currentDrawdownMaxDays > 0) {
+                    drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
+                }
+                currentPeakPrice = price;
+                currentPeakTime = time;
+                currentDrawdownMaxDays = 0;
+                currentDrawdownLastTime = time;
+            } else {
+                const days = (time - currentPeakTime) / 86400;
+                currentDrawdownMaxDays = days;
+                currentDrawdownLastTime = time;
+            }
+        }
+        
+        if (currentDrawdownMaxDays > 0) {
+            drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
+        }
+
+        drawdowns.sort((a, b) => b.days - a.days);
+
+        const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
+        const top2 = drawdowns[1] || { start: firstTime, end: firstTime, days: 0 };
+
+        top1.startStr = new Date(top1.start * 1000).toISOString().split('T')[0];
+        top1.endStr = new Date(top1.end * 1000).toISOString().split('T')[0];
+        top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
+        top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
+
+        const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
+        const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
+
+        chartDataStore[raw.ticker] = {
+            labels: chartLabels,
+            dataPoints: chartDataPoints,
+            stockName: raw.stockName,
+            top1: top1,
+            top2: top2
+        };
+
+        return {
+            ticker: raw.ticker, stockName: raw.stockName, firstDateStr, lastDateStr, firstPrice, lastPrice,
+            daysDiff: Math.round(daysDiff), cagr,
+            top1, error: false
+        };
     }
 
     function openChartModal(ticker) {
@@ -430,8 +518,8 @@
                     display: true,
                     content: `1위 (${(chartData.top1.days/365.2425).toFixed(2)}년)`,
                     position: 'start',
-                    color: 'black', // 글씨색 검정으로 변경
-                    backgroundColor: 'rgba(255, 255, 255, 0.7)', // 글씨가 잘 보이도록 반투명 흰색 배경 추가
+                    color: 'black',
+                    backgroundColor: 'rgba(255, 255, 255, 0.7)',
                     font: { size: 13, weight: 'bold' }
                 }
             };
@@ -447,7 +535,7 @@
                     display: true,
                     content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
                     position: 'start',
-                    color: 'black', // 글씨색 검정으로 변경
+                    color: 'black',
                     backgroundColor: 'rgba(255, 255, 255, 0.7)',
                     font: { size: 13, weight: 'bold' }
                 }
@@ -490,10 +578,9 @@
                         ticks: { maxRotation: 0 }
                     },
                     y: { 
-                        type: 'logarithmic', // 로그 스케일로 변경
+                        type: 'logarithmic',
                         ticks: { 
                             callback: function(value) { 
-                                // 로그 스케일에서는 숫자가 많아지므로 보기에 깔끔하게 축약
                                 return '$' + value.toLocaleString(); 
                             } 
                         }
