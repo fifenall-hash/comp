@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>주식 티커 CAGR & 물림일수 시각화 비교기</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script> <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0"></script>
     
     <style>
         :root {
@@ -20,7 +20,7 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: var(--bg-color);
             color: #333;
-            max-width: 950px;
+            max-width: 1100px; /* 표가 넓어졌으므로 최대 너비 확장 */
             margin: 40px auto;
             padding: 20px;
         }
@@ -56,7 +56,6 @@
         }
         button:hover { background-color: var(--hover-color); }
         
-        /* 버튼 스타일 추가 */
         .chart-btn {
             background-color: var(--btn-color);
             padding: 6px 12px;
@@ -97,6 +96,7 @@
             width: 100%;
             border-collapse: collapse;
             margin-top: 20px;
+            font-size: 15px;
         }
         th, td {
             padding: 12px;
@@ -130,7 +130,7 @@
             padding: 20px;
             border-radius: 10px;
             width: 90%;
-            max-width: 900px;
+            max-width: 1000px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.3);
         }
         .close-btn {
@@ -141,7 +141,7 @@
             cursor: pointer;
         }
         .close-btn:hover, .close-btn:focus { color: #000; }
-        .chart-container { height: 450px; width: 100%; margin-top: 20px; }
+        .chart-container { height: 500px; width: 100%; margin-top: 20px; }
     </style>
 </head>
 <body>
@@ -150,7 +150,7 @@
     <h1>📈 주식 CAGR & 최장 물림구간 비교기</h1>
     
     <div class="input-group">
-        <input type="text" id="tickerInput" placeholder="티커 입력 (예: QQQ, TSLA, 000660.KS)" onkeypress="handleKeyPress(event)">
+        <input type="text" id="tickerInput" placeholder="티커 입력 (예: QQQ, TQQQ, 000660.KS)" onkeypress="handleKeyPress(event)">
         <button onclick="addTicker()">추가하기</button>
     </div>
 
@@ -168,6 +168,7 @@
                 <th>최신 데이터</th>
                 <th>전체 경과일</th>
                 <th>최장 물림일수</th>
+                <th>최장 물림 기간</th>
                 <th>CAGR (연평균 수익률)</th>
             </tr>
         </thead>
@@ -187,9 +188,8 @@
 
 <script>
     let tickers = [];
-    // 차트를 그리기 위해 종목별 데이터를 저장해둘 전역 객체
     let chartDataStore = {}; 
-    let myChartInstance = null; // 차트 객체를 담을 변수
+    let myChartInstance = null; 
 
     function addTicker() {
         const input = document.getElementById('tickerInput');
@@ -236,18 +236,22 @@
         loading.style.display = 'block';
         table.style.display = 'none';
         tbody.innerHTML = '';
-        chartDataStore = {}; // 기존 데이터 초기화
+        chartDataStore = {}; 
 
         try {
             const results = await Promise.all(tickers.map(fetchAndCalculate));
             
             results.forEach(res => {
                 if(res.error) {
-                    tbody.innerHTML += `<tr><td><strong>${res.ticker}</strong></td><td colspan="5" style="text-align:center; color:red;">데이터를 불러올 수 없습니다.</td></tr>`;
+                    tbody.innerHTML += `<tr><td><strong>${res.ticker}</strong></td><td colspan="6" style="text-align:center; color:red;">데이터를 불러올 수 없습니다.</td></tr>`;
                     return;
                 }
                 
                 const cagrPercent = (res.cagr * 100).toFixed(2);
+                
+                // N년 계산 로직 (수식 적용)
+                const yearsStr = (res.top1.days / 365.2425).toFixed(2);
+                const periodStr = `${res.top1.startStr} ~ <br>${res.top1.endStr}`;
                 
                 tbody.innerHTML += `
                     <tr>
@@ -257,10 +261,11 @@
                         <td>${res.daysDiff.toLocaleString()} 일</td>
                         <td>
                             <div class="highlight-drawdown">
-                                ${res.maxUnderwaterDays.toLocaleString()} 일
+                                ${yearsStr}년 (${Math.round(res.top1.days).toLocaleString()} 일)
                                 <button class="chart-btn" onclick="openChartModal('${res.ticker}')">[차트]</button>
                             </div>
                         </td>
+                        <td style="font-size: 0.9em; color: #555;">${periodStr}</td>
                         <td class="highlight-cagr">${cagrPercent}%</td>
                     </tr>
                 `;
@@ -302,13 +307,12 @@
             const daysDiff = (lastTime - firstTime) / 86400;
             const cagr = Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1;
 
-            // 물림일수 및 차트를 위한 데이터 수집 변수
-            let maxUnderwaterDays = 0;
+            // 독립적인 물림 구간들을 저장할 배열
+            let drawdowns = [];
             let currentPeakPrice = -1;
             let currentPeakTime = -1;
-            
-            let maxDrawdownStartTime = -1;
-            let maxDrawdownEndTime = -1;
+            let currentDrawdownMaxDays = 0;
+            let currentDrawdownLastTime = -1;
 
             const chartLabels = [];
             const chartDataPoints = [];
@@ -316,46 +320,70 @@
             for (let i = firstIdx; i <= lastIdx; i++) {
                 const price = closePrices[i];
                 const time = timestamps[i];
-                
                 if (price === null) continue;
 
-                // 차트를 위한 배열 저장 (날짜 포맷)
-                const dateStr = new Date(time * 1000).toISOString().split('T')[0];
-                chartLabels.push(dateStr);
+                chartLabels.push(new Date(time * 1000).toISOString().split('T')[0]);
                 chartDataPoints.push(price);
 
-                if (price > currentPeakPrice) {
+                if (price >= currentPeakPrice) {
+                    // 전고점을 돌파(회복)했을 때, 진행 중이던 물림 구간을 기록합니다.
+                    if (currentPeakTime !== -1 && currentDrawdownMaxDays > 0) {
+                        drawdowns.push({
+                            start: currentPeakTime,
+                            end: currentDrawdownLastTime,
+                            days: currentDrawdownMaxDays
+                        });
+                    }
+                    // 새로운 전고점 설정
                     currentPeakPrice = price;
                     currentPeakTime = time;
+                    currentDrawdownMaxDays = 0;
+                    currentDrawdownLastTime = time;
                 } else {
-                    const underwaterDays = (time - currentPeakTime) / 86400;
-                    if (underwaterDays > maxUnderwaterDays) {
-                        maxUnderwaterDays = underwaterDays;
-                        maxDrawdownStartTime = currentPeakTime; // 물리기 시작한 전고점 날짜
-                        maxDrawdownEndTime = time; // 회복하지 못하고 기록을 경신한 마지막 날짜
-                    }
+                    // 전고점 아래에 머물러 있는 상태 (물림 지속)
+                    const days = (time - currentPeakTime) / 86400;
+                    currentDrawdownMaxDays = days;
+                    currentDrawdownLastTime = time;
                 }
             }
+            
+            // 배열이 끝났는데도 회복하지 못하고 물려있는 경우 마지막 기록 추가
+            if (currentDrawdownMaxDays > 0) {
+                drawdowns.push({
+                    start: currentPeakTime,
+                    end: currentDrawdownLastTime,
+                    days: currentDrawdownMaxDays
+                });
+            }
+
+            // 물림 기간이 가장 긴 순서대로 내림차순 정렬
+            drawdowns.sort((a, b) => b.days - a.days);
+
+            // 1위, 2위 물림 구간 추출 (물림이 없었을 경우를 대비해 기본값 설정)
+            const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
+            const top2 = drawdowns[1] || { start: firstTime, end: firstTime, days: 0 };
+
+            // 타임스탬프를 문자열 날짜로 변환
+            top1.startStr = new Date(top1.start * 1000).toISOString().split('T')[0];
+            top1.endStr = new Date(top1.end * 1000).toISOString().split('T')[0];
+            top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
+            top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
 
             const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
             const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
-            
-            const drawdownStartDateStr = new Date(maxDrawdownStartTime * 1000).toISOString().split('T')[0];
-            const drawdownEndDateStr = new Date(maxDrawdownEndTime * 1000).toISOString().split('T')[0];
 
-            // 💡 여기서 차트용 데이터를 전역 변수에 저장합니다!
+            // 전역 변수에 차트용 1위, 2위 데이터 모두 저장
             chartDataStore[ticker] = {
                 labels: chartLabels,
                 dataPoints: chartDataPoints,
-                drawdownStart: drawdownStartDateStr,
-                drawdownEnd: drawdownEndDateStr,
-                maxDays: Math.round(maxUnderwaterDays)
+                top1: top1,
+                top2: top2
             };
 
             return {
                 ticker, firstDateStr, lastDateStr, firstPrice, lastPrice,
                 daysDiff: Math.round(daysDiff), cagr,
-                maxUnderwaterDays: Math.round(maxUnderwaterDays), error: false
+                top1, error: false
             };
         } catch (err) {
             console.error(`${ticker} 에러:`, err);
@@ -363,7 +391,6 @@
         }
     }
 
-    // 모달 열기 및 차트 그리기
     function openChartModal(ticker) {
         const modal = document.getElementById('chartModal');
         const title = document.getElementById('modalTitle');
@@ -372,12 +399,48 @@
 
         if (!chartData) return;
 
-        title.innerHTML = `${ticker} 주가 흐름 및 최장 물림구간 (<span style="color:#e74c3c;">${chartData.maxDays}일</span>)`;
+        title.innerHTML = `${ticker} 주가 흐름 및 1,2위 물림구간`;
         modal.style.display = 'block';
 
-        // 기존에 그려진 차트가 있다면 지우고 새로 그리기
         if (myChartInstance) {
             myChartInstance.destroy();
+        }
+
+        // Annotation 객체 동적 생성 (1위, 2위)
+        const annotations = {};
+        if (chartData.top1.days > 0) {
+            annotations.box1 = {
+                type: 'box',
+                xMin: chartData.top1.startStr,
+                xMax: chartData.top1.endStr,
+                backgroundColor: 'rgba(231, 76, 60, 0.25)', // 1위: 빨간색
+                borderWidth: 0,
+                label: {
+                    display: true,
+                    content: `1위 (${(chartData.top1.days/365.2425).toFixed(2)}년)`,
+                    position: 'start',
+                    color: 'white',
+                    backgroundColor: 'rgba(231, 76, 60, 0.8)',
+                    font: { size: 12 }
+                }
+            };
+        }
+        if (chartData.top2.days > 0) {
+            annotations.box2 = {
+                type: 'box',
+                xMin: chartData.top2.startStr,
+                xMax: chartData.top2.endStr,
+                backgroundColor: 'rgba(243, 156, 18, 0.25)', // 2위: 주황색
+                borderWidth: 0,
+                label: {
+                    display: true,
+                    content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
+                    position: 'start',
+                    color: 'white',
+                    backgroundColor: 'rgba(243, 156, 18, 0.8)',
+                    font: { size: 12 }
+                }
+            };
         }
 
         myChartInstance = new Chart(ctx, {
@@ -389,7 +452,7 @@
                     data: chartData.dataPoints,
                     borderColor: '#3498db',
                     borderWidth: 1.5,
-                    pointRadius: 0, // 선명도를 위해 데이터 포인트 동그라미 숨김
+                    pointRadius: 0,
                     pointHoverRadius: 4,
                     fill: false,
                     tension: 0.1
@@ -404,52 +467,36 @@
                 },
                 plugins: {
                     legend: { display: false },
-                    // 특정 구간(물림일수) 배경색칠 옵션
-                    annotation: {
-                        annotations: {
-                            box1: {
-                                type: 'box',
-                                xMin: chartData.drawdownStart,
-                                xMax: chartData.drawdownEnd,
-                                backgroundColor: 'rgba(231, 76, 60, 0.25)', // 옅은 빨간색
-                                borderWidth: 0,
-                                label: {
-                                    display: true,
-                                    content: '🚨 최장 물림 구간',
-                                    position: 'start',
-                                    color: 'white',
-                                    backgroundColor: 'rgba(231, 76, 60, 0.8)',
-                                    font: { size: 12 }
-                                }
-                            }
-                        }
-                    }
+                    annotation: { annotations: annotations }
                 },
                 scales: {
-                    x: { ticks: { maxTicksLimit: 10 } },
+                    // X축 설정을 'time' 스케일로 변경하여 연도별 매년 1월 기준으로 정렬
+                    x: { 
+                        type: 'time',
+                        time: {
+                            unit: 'year',
+                            displayFormats: {
+                                year: 'yyyy' // 2024, 2025 등 연도만 깔끔하게 표시
+                            }
+                        },
+                        ticks: { maxRotation: 0 }
+                    },
                     y: { 
-                        // Y축 로그 스케일 여부 (원하신다면 'logarithmic'으로 변경 가능)
                         type: 'linear', 
-                        ticks: {
-                            callback: function(value) { return '$' + value; }
-                        }
+                        ticks: { callback: function(value) { return '$' + value; } }
                     }
                 }
             }
         });
     }
 
-    // 모달 닫기
     function closeChartModal() {
         document.getElementById('chartModal').style.display = 'none';
     }
 
-    // 모달 바깥 배경 클릭 시 닫기
     window.onclick = function(event) {
         const modal = document.getElementById('chartModal');
-        if (event.target == modal) {
-            closeChartModal();
-        }
+        if (event.target == modal) closeChartModal();
     }
 </script>
 
