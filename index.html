@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>주식 티커 CAGR & 물림일수 시각화 비교기</title>
+    <title>📈 주식 CAGR & 최장 물림구간 비교</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script> <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0"></script>
     
     <style>
         :root {
@@ -20,7 +21,7 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: var(--bg-color);
             color: #333;
-            max-width: 1100px; /* 표가 넓어졌으므로 최대 너비 확장 */
+            max-width: 1100px;
             margin: 40px auto;
             padding: 20px;
         }
@@ -31,6 +32,23 @@
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         h1 { text-align: center; color: #2c3e50; }
+        
+        .example-info {
+            background-color: #e8f4f8;
+            color: #2980b9;
+            padding: 12px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            text-align: center;
+        }
+        .example-info code {
+            background-color: #d4e6f1;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+
         .input-group {
             display: flex;
             gap: 10px;
@@ -126,11 +144,11 @@
         }
         .modal-content {
             background-color: #fff;
-            margin: 5% auto;
+            margin: 3% auto;
             padding: 20px;
             border-radius: 10px;
             width: 90%;
-            max-width: 1000px;
+            max-width: 1100px;
             box-shadow: 0 5px 15px rgba(0,0,0,0.3);
         }
         .close-btn {
@@ -141,16 +159,20 @@
             cursor: pointer;
         }
         .close-btn:hover, .close-btn:focus { color: #000; }
-        .chart-container { height: 500px; width: 100%; margin-top: 20px; }
+        .chart-container { height: 550px; width: 100%; margin-top: 20px; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>📈 주식 CAGR & 최장 물림구간 비교기</h1>
+    <h1>📈 주식 CAGR & 최장 물림구간 비교</h1>
+    
+    <div class="example-info">
+        💡 <strong>예시:</strong> SK하이닉스는 <code>000660.KS</code>, 삼성전자는 <code>005930.KS</code>, 비트코인은 <code>BTC-KRW</code> 형식으로 입력해 주세요.
+    </div>
     
     <div class="input-group">
-        <input type="text" id="tickerInput" placeholder="티커 입력 (예: QQQ, TQQQ, 000660.KS)" onkeypress="handleKeyPress(event)">
+        <input type="text" id="tickerInput" placeholder="티커 입력 (예: QQQ, TQQQ, BTC-KRW)" onkeypress="handleKeyPress(event)">
         <button onclick="addTicker()">추가하기</button>
     </div>
 
@@ -248,16 +270,17 @@
                 }
                 
                 const cagrPercent = (res.cagr * 100).toFixed(2);
-                
-                // N년 계산 로직 (수식 적용)
                 const yearsStr = (res.top1.days / 365.2425).toFixed(2);
                 const periodStr = `${res.top1.startStr} ~ <br>${res.top1.endStr}`;
                 
                 tbody.innerHTML += `
                     <tr>
-                        <td><strong>${res.ticker}</strong></td>
-                        <td>${res.firstDateStr}<br><small>($${res.firstPrice.toFixed(2)})</small></td>
-                        <td>${res.lastDateStr}<br><small>($${res.lastPrice.toFixed(2)})</small></td>
+                        <td>
+                            <strong>${res.ticker}</strong><br>
+                            <small style="color: #7f8c8d;">${res.stockName}</small>
+                        </td>
+                        <td>${res.firstDateStr}<br><small>($${res.firstPrice.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})})</small></td>
+                        <td>${res.lastDateStr}<br><small>($${res.lastPrice.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})})</small></td>
                         <td>${res.daysDiff.toLocaleString()} 일</td>
                         <td>
                             <div class="highlight-drawdown">
@@ -290,6 +313,11 @@
             
             const data = await response.json();
             const resultObj = data.chart.result[0];
+            
+            // API의 meta 데이터에서 종목 전체 이름(Full Name) 추출
+            const metaInfo = resultObj.meta;
+            const stockName = metaInfo.shortName || metaInfo.longName || ticker;
+
             const timestamps = resultObj.timestamp;
             const closePrices = resultObj.indicators.quote[0].close;
 
@@ -307,7 +335,6 @@
             const daysDiff = (lastTime - firstTime) / 86400;
             const cagr = Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1;
 
-            // 독립적인 물림 구간들을 저장할 배열
             let drawdowns = [];
             let currentPeakPrice = -1;
             let currentPeakTime = -1;
@@ -326,44 +353,29 @@
                 chartDataPoints.push(price);
 
                 if (price >= currentPeakPrice) {
-                    // 전고점을 돌파(회복)했을 때, 진행 중이던 물림 구간을 기록합니다.
                     if (currentPeakTime !== -1 && currentDrawdownMaxDays > 0) {
-                        drawdowns.push({
-                            start: currentPeakTime,
-                            end: currentDrawdownLastTime,
-                            days: currentDrawdownMaxDays
-                        });
+                        drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
                     }
-                    // 새로운 전고점 설정
                     currentPeakPrice = price;
                     currentPeakTime = time;
                     currentDrawdownMaxDays = 0;
                     currentDrawdownLastTime = time;
                 } else {
-                    // 전고점 아래에 머물러 있는 상태 (물림 지속)
                     const days = (time - currentPeakTime) / 86400;
                     currentDrawdownMaxDays = days;
                     currentDrawdownLastTime = time;
                 }
             }
             
-            // 배열이 끝났는데도 회복하지 못하고 물려있는 경우 마지막 기록 추가
             if (currentDrawdownMaxDays > 0) {
-                drawdowns.push({
-                    start: currentPeakTime,
-                    end: currentDrawdownLastTime,
-                    days: currentDrawdownMaxDays
-                });
+                drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
             }
 
-            // 물림 기간이 가장 긴 순서대로 내림차순 정렬
             drawdowns.sort((a, b) => b.days - a.days);
 
-            // 1위, 2위 물림 구간 추출 (물림이 없었을 경우를 대비해 기본값 설정)
             const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
             const top2 = drawdowns[1] || { start: firstTime, end: firstTime, days: 0 };
 
-            // 타임스탬프를 문자열 날짜로 변환
             top1.startStr = new Date(top1.start * 1000).toISOString().split('T')[0];
             top1.endStr = new Date(top1.end * 1000).toISOString().split('T')[0];
             top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
@@ -372,16 +384,16 @@
             const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
             const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
 
-            // 전역 변수에 차트용 1위, 2위 데이터 모두 저장
             chartDataStore[ticker] = {
                 labels: chartLabels,
                 dataPoints: chartDataPoints,
+                stockName: stockName,
                 top1: top1,
                 top2: top2
             };
 
             return {
-                ticker, firstDateStr, lastDateStr, firstPrice, lastPrice,
+                ticker, stockName, firstDateStr, lastDateStr, firstPrice, lastPrice,
                 daysDiff: Math.round(daysDiff), cagr,
                 top1, error: false
             };
@@ -399,29 +411,28 @@
 
         if (!chartData) return;
 
-        title.innerHTML = `${ticker} 주가 흐름 및 1,2위 물림구간`;
+        title.innerHTML = `${chartData.stockName} (${ticker}) 주가 흐름 및 물림구간`;
         modal.style.display = 'block';
 
         if (myChartInstance) {
             myChartInstance.destroy();
         }
 
-        // Annotation 객체 동적 생성 (1위, 2위)
         const annotations = {};
         if (chartData.top1.days > 0) {
             annotations.box1 = {
                 type: 'box',
                 xMin: chartData.top1.startStr,
                 xMax: chartData.top1.endStr,
-                backgroundColor: 'rgba(231, 76, 60, 0.25)', // 1위: 빨간색
+                backgroundColor: 'rgba(231, 76, 60, 0.25)', 
                 borderWidth: 0,
                 label: {
                     display: true,
                     content: `1위 (${(chartData.top1.days/365.2425).toFixed(2)}년)`,
                     position: 'start',
-                    color: 'white',
-                    backgroundColor: 'rgba(231, 76, 60, 0.8)',
-                    font: { size: 12 }
+                    color: 'black', // 글씨색 검정으로 변경
+                    backgroundColor: 'rgba(255, 255, 255, 0.7)', // 글씨가 잘 보이도록 반투명 흰색 배경 추가
+                    font: { size: 13, weight: 'bold' }
                 }
             };
         }
@@ -430,15 +441,15 @@
                 type: 'box',
                 xMin: chartData.top2.startStr,
                 xMax: chartData.top2.endStr,
-                backgroundColor: 'rgba(243, 156, 18, 0.25)', // 2위: 주황색
+                backgroundColor: 'rgba(243, 156, 18, 0.25)', 
                 borderWidth: 0,
                 label: {
                     display: true,
                     content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
                     position: 'start',
-                    color: 'white',
-                    backgroundColor: 'rgba(243, 156, 18, 0.8)',
-                    font: { size: 12 }
+                    color: 'black', // 글씨색 검정으로 변경
+                    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+                    font: { size: 13, weight: 'bold' }
                 }
             };
         }
@@ -448,7 +459,7 @@
             data: {
                 labels: chartData.labels,
                 datasets: [{
-                    label: `${ticker} 종가`,
+                    label: `종가 (Log Scale)`,
                     data: chartData.dataPoints,
                     borderColor: '#3498db',
                     borderWidth: 1.5,
@@ -470,20 +481,22 @@
                     annotation: { annotations: annotations }
                 },
                 scales: {
-                    // X축 설정을 'time' 스케일로 변경하여 연도별 매년 1월 기준으로 정렬
                     x: { 
                         type: 'time',
                         time: {
                             unit: 'year',
-                            displayFormats: {
-                                year: 'yyyy' // 2024, 2025 등 연도만 깔끔하게 표시
-                            }
+                            displayFormats: { year: 'yyyy' }
                         },
                         ticks: { maxRotation: 0 }
                     },
                     y: { 
-                        type: 'linear', 
-                        ticks: { callback: function(value) { return '$' + value; } }
+                        type: 'logarithmic', // 로그 스케일로 변경
+                        ticks: { 
+                            callback: function(value) { 
+                                // 로그 스케일에서는 숫자가 많아지므로 보기에 깔끔하게 축약
+                                return '$' + value.toLocaleString(); 
+                            } 
+                        }
                     }
                 }
             }
