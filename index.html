@@ -292,6 +292,7 @@
         ).join('');
     }
 
+    // --- 1단계: 데이터 가져오기 및 결측치 완벽 정제 ---
     async function fetchRawData(ticker) {
         try {
             const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=max`;
@@ -306,17 +307,38 @@
             const metaInfo = resultObj.meta;
             const stockName = metaInfo.shortName || metaInfo.longName || ticker;
 
-            // 💡 핵심 변경: 수정종가(adjclose)가 존재하면 수정종가를, 없으면 일반 종가를 사용
-            let closePrices = resultObj.indicators.quote[0].close;
+            const rawTimestamps = resultObj.timestamp || [];
+            
+            // 수정종가(adjclose)가 존재하면 우선 적용, 없으면 일반 종가 적용
+            let rawPrices = [];
             if (resultObj.indicators.adjclose && resultObj.indicators.adjclose[0].adjclose) {
-                closePrices = resultObj.indicators.adjclose[0].adjclose;
+                rawPrices = resultObj.indicators.adjclose[0].adjclose;
+            } else if (resultObj.indicators.quote && resultObj.indicators.quote[0].close) {
+                rawPrices = resultObj.indicators.quote[0].close;
+            }
+
+            const cleanTimestamps = [];
+            const cleanPrices = [];
+
+            // 💡 데이터 정제(Cleansing): null, undefined, NaN, 0 이하인 쓰레기값을 날짜와 함께 동반 삭제
+            for (let i = 0; i < rawTimestamps.length; i++) {
+                const price = rawPrices[i];
+                if (price !== null && price !== undefined && typeof price === 'number' && price > 0) {
+                    cleanTimestamps.push(rawTimestamps[i]);
+                    cleanPrices.push(price);
+                }
+            }
+
+            // 정제 후 남은 데이터가 없으면 에러 처리
+            if (cleanTimestamps.length === 0) {
+                throw new Error("유효한 가격 데이터가 없습니다.");
             }
 
             return {
                 ticker,
                 stockName,
-                timestamps: resultObj.timestamp,
-                closePrices: closePrices,
+                timestamps: cleanTimestamps, // 오염되지 않은 깨끗한 날짜 배열
+                closePrices: cleanPrices,    // 오염되지 않은 깨끗한 가격 배열 (1:1 매칭 완료)
                 error: false
             };
         } catch (err) {
@@ -325,6 +347,7 @@
         }
     }
 
+    // --- 2단계: 메인 프로세스 (비교하기) ---
     async function processComparison(mode) {
         if (tickers.length === 0) {
             alert('비교할 티커를 최소 1개 이상 입력해주세요.');
@@ -349,12 +372,8 @@
             let commonStartTime = -1;
 
             if (mode === 'same') {
-                const validFirstTimes = rawDataArray.filter(d => !d.error).map(d => {
-                    let idx = 0;
-                    while (idx < d.closePrices.length && d.closePrices[idx] === null) idx++;
-                    return d.timestamps[idx]; 
-                });
-                
+                // 이미 정제된 데이터의 0번째 인덱스가 완벽한 '최초 유효 날짜'입니다.
+                const validFirstTimes = rawDataArray.filter(d => !d.error).map(d => d.timestamps[0]);
                 if (validFirstTimes.length > 0) {
                     commonStartTime = Math.max(...validFirstTimes); 
                 }
@@ -403,6 +422,7 @@
         }
     }
 
+    // --- 3단계: 연산 엔진 (이미 정제된 무결점 데이터만 수신함) ---
     function calculateMetrics(raw, commonStartTime) {
         if (raw.error) return { ticker: raw.ticker, error: true };
 
@@ -411,22 +431,18 @@
 
         let firstIdx = 0;
         
+        // 공통 시작일이 지정된 경우, 해당 날짜 이후부터 분석 시작
         if (commonStartTime !== -1) {
             while (firstIdx < timestamps.length && timestamps[firstIdx] < commonStartTime) {
                 firstIdx++;
             }
         }
-        
-        while (firstIdx < closePrices.length && closePrices[firstIdx] === null) { 
-            firstIdx++; 
-        }
 
-        let lastIdx = closePrices.length - 1;
-        while (lastIdx >= 0 && closePrices[lastIdx] === null) { lastIdx--; }
+        // 인덱스 초과 시 에러 반환 (예: 상장일이 너무 늦어 같은 구간 데이터가 아예 없는 경우)
+        if (firstIdx >= closePrices.length) return { ticker: raw.ticker, error: true }; 
 
-        if (firstIdx >= closePrices.length || firstIdx >= lastIdx) {
-             return { ticker: raw.ticker, error: true }; 
-        }
+        const lastIdx = closePrices.length - 1;
+        if (firstIdx >= lastIdx) return { ticker: raw.ticker, error: true }; 
 
         const firstTime = timestamps[firstIdx]; 
         const lastTime = timestamps[lastIdx];
@@ -445,10 +461,10 @@
         const chartLabels = [];
         const chartDataPoints = [];
 
+        // 데이터가 이미 정제되었으므로 null 체크 없이 곧바로 고속 연산 돌입
         for (let i = firstIdx; i <= lastIdx; i++) {
             const price = closePrices[i];
             const time = timestamps[i];
-            if (price === null) continue;
 
             chartLabels.push(new Date(time * 1000).toISOString().split('T')[0]);
             chartDataPoints.push(price);
@@ -482,7 +498,6 @@
         top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
         top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
 
-        // 💡 텍스트 짤림 방지 로직: 하락장이 차트 전체 길이의 70%를 넘어간 우측에 위치하면, 글씨 정렬을 오른쪽('end')으로 변경
         const totalDuration = lastTime - firstTime;
         top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
         top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
@@ -531,7 +546,6 @@
                 label: {
                     display: true,
                     content: `1위 (${(chartData.top1.days/365.2425).toFixed(2)}년)`,
-                    // 💡 차트 오른쪽 짤림 방지를 위해 동적으로 정렬 방식(x축) 대입
                     position: { x: chartData.top1.labelAlign, y: 'start' },
                     color: 'black',
                     backgroundColor: 'rgba(255, 255, 255, 0.7)',
@@ -549,7 +563,6 @@
                 label: {
                     display: true,
                     content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
-                    // 💡 차트 오른쪽 짤림 방지를 위해 동적으로 정렬 방식(x축) 대입
                     position: { x: chartData.top2.labelAlign, y: 'start' },
                     color: 'black',
                     backgroundColor: 'rgba(255, 255, 255, 0.7)',
