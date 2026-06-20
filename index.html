@@ -32,8 +32,6 @@
             padding: 25px 20px;
             border-radius: 10px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            
-            /* 접속 환경 가로 길이에 100% 맞춤 */
             width: 100%; 
             max-width: 1200px; 
             box-sizing: border-box;
@@ -145,7 +143,6 @@
             font-weight: bold;
         }
         
-        /* 테이블 기본 스타일 (데스크톱 / 가로 모드) */
         .table-wrapper {
             width: 100%;
             overflow-x: auto;
@@ -186,58 +183,25 @@
         .close-btn:hover { color: #000; }
         .chart-container { height: 60vh; min-height: 400px; width: 100%; margin-top: 20px; }
 
-        /* =========================================================
-           🚀 핵심 로직: 스마트폰 환경 (세로가 가로보다 긴 경우)
-           ========================================================= */
         @media (orientation: portrait) {
-            table, thead, tbody, tr, th, td {
-                display: block; /* 기본 테이블 속성을 해제하고 블록/그리드로 변환 */
-            }
+            table, thead, tbody, tr, th, td { display: block; }
             table { font-size: 13px; white-space: normal; }
-            
-            /* 하나의 행(tr)을 12칸짜리 그리드로 쪼갭니다 */
             tr {
                 display: grid;
                 grid-template-columns: repeat(12, 1fr);
-                border-bottom: 4px solid #bdc3c7; /* 각 종목을 명확히 구분하는 굵은 선 */
+                border-bottom: 4px solid #bdc3c7; 
                 margin-bottom: 10px;
                 background-color: #fff;
             }
-            thead tr {
-                margin-bottom: 0;
-                border-bottom: 2px solid #2c3e50;
+            thead tr { margin-bottom: 0; border-bottom: 2px solid #2c3e50; }
+            th, td { border-bottom: none; text-align: center !important; padding: 10px 4px; word-break: keep-all; }
+            th:nth-child(1), td:nth-child(1), th:nth-child(2), td:nth-child(2),
+            th:nth-child(3), td:nth-child(3), th:nth-child(4), td:nth-child(4) {
+                grid-column: span 3; border-bottom: 1px dashed #ecf0f1; 
             }
-            th, td {
-                border-bottom: none;
-                text-align: center !important; /* 모바일은 가운데 정렬이 깔끔함 */
-                padding: 10px 4px;
-                word-break: keep-all;
-            }
-
-            /* --- 1번째 줄 (4개 항목) --- 
-               12칸 중 각각 3칸씩 차지 (3 x 4 = 12칸) */
-            th:nth-child(1), td:nth-child(1),
-            th:nth-child(2), td:nth-child(2),
-            th:nth-child(3), td:nth-child(3),
-            th:nth-child(4), td:nth-child(4) {
-                grid-column: span 3;
-                border-bottom: 1px dashed #ecf0f1; /* 1, 2번째 줄을 구분하는 점선 */
-            }
-
-            /* --- 2번째 줄 (3개 항목) --- 
-               12칸 중 각각 4칸씩 차지 (4 x 3 = 12칸) */
-            th:nth-child(5), td:nth-child(5),
-            th:nth-child(6), td:nth-child(6),
-            th:nth-child(7), td:nth-child(7) {
-                grid-column: span 4;
-            }
-
-            /* 모바일 요소 정렬 보정 */
-            .highlight-drawdown { 
-                justify-content: center; 
-                flex-direction: column; /* 버튼을 아래로 내림 */
-                gap: 5px; 
-            }
+            th:nth-child(5), td:nth-child(5), th:nth-child(6), td:nth-child(6),
+            th:nth-child(7), td:nth-child(7) { grid-column: span 4; }
+            .highlight-drawdown { justify-content: center; flex-direction: column; gap: 5px; }
             .chart-btn { margin-left: 0; }
         }
     </style>
@@ -342,11 +306,17 @@
             const metaInfo = resultObj.meta;
             const stockName = metaInfo.shortName || metaInfo.longName || ticker;
 
+            // 💡 핵심 변경: 수정종가(adjclose)가 존재하면 수정종가를, 없으면 일반 종가를 사용
+            let closePrices = resultObj.indicators.quote[0].close;
+            if (resultObj.indicators.adjclose && resultObj.indicators.adjclose[0].adjclose) {
+                closePrices = resultObj.indicators.adjclose[0].adjclose;
+            }
+
             return {
                 ticker,
                 stockName,
                 timestamps: resultObj.timestamp,
-                closePrices: resultObj.indicators.quote[0].close,
+                closePrices: closePrices,
                 error: false
             };
         } catch (err) {
@@ -512,6 +482,11 @@
         top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
         top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
 
+        // 💡 텍스트 짤림 방지 로직: 하락장이 차트 전체 길이의 70%를 넘어간 우측에 위치하면, 글씨 정렬을 오른쪽('end')으로 변경
+        const totalDuration = lastTime - firstTime;
+        top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+        top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+
         const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
         const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
 
@@ -538,7 +513,7 @@
 
         if (!chartData) return;
 
-        title.innerHTML = `${chartData.stockName} (${ticker}) 주가 흐름 및 물림구간`;
+        title.innerHTML = `${chartData.stockName} (${ticker}) 수정종가 흐름 및 물림구간`;
         modal.style.display = 'block';
 
         if (myChartInstance) {
@@ -556,7 +531,8 @@
                 label: {
                     display: true,
                     content: `1위 (${(chartData.top1.days/365.2425).toFixed(2)}년)`,
-                    position: 'start',
+                    // 💡 차트 오른쪽 짤림 방지를 위해 동적으로 정렬 방식(x축) 대입
+                    position: { x: chartData.top1.labelAlign, y: 'start' },
                     color: 'black',
                     backgroundColor: 'rgba(255, 255, 255, 0.7)',
                     font: { size: 13, weight: 'bold' }
@@ -573,7 +549,8 @@
                 label: {
                     display: true,
                     content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
-                    position: 'start',
+                    // 💡 차트 오른쪽 짤림 방지를 위해 동적으로 정렬 방식(x축) 대입
+                    position: { x: chartData.top2.labelAlign, y: 'start' },
                     color: 'black',
                     backgroundColor: 'rgba(255, 255, 255, 0.7)',
                     font: { size: 13, weight: 'bold' }
@@ -586,7 +563,7 @@
             data: {
                 labels: chartData.labels,
                 datasets: [{
-                    label: `종가 (Log Scale)`,
+                    label: `수정종가 (Log Scale)`,
                     data: chartData.dataPoints,
                     borderColor: '#3498db',
                     borderWidth: 1.5,
