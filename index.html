@@ -170,8 +170,10 @@
             margin-bottom: 20px;
             display: none;
         }
-        .highlight-cagr { color: var(--primary-color); font-weight: bold; font-size: 1.1em;}
+        
+        /* 테이블 안 요소 정렬 보정 */
         .highlight-drawdown { display: flex; align-items: center; justify-content: flex-end; color: var(--danger-color); font-weight: bold; }
+        .highlight-cagr { display: flex; align-items: center; justify-content: flex-end; color: var(--primary-color); font-weight: bold; font-size: 1.1em; }
         
         /* 모달 팝업 스타일 */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); }
@@ -201,7 +203,9 @@
             }
             th:nth-child(5), td:nth-child(5), th:nth-child(6), td:nth-child(6),
             th:nth-child(7), td:nth-child(7) { grid-column: span 4; }
-            .highlight-drawdown { justify-content: center; flex-direction: column; gap: 5px; }
+            
+            /* 모바일에서 버튼이 숫자 아래로 떨어지도록 세로 정렬 */
+            .highlight-drawdown, .highlight-cagr { justify-content: center; flex-direction: column; gap: 5px; }
             .chart-btn { margin-left: 0; }
         }
     </style>
@@ -227,7 +231,7 @@
         <button id="btnSame" class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
     </div>
 
-    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다... ⏳</div>
+    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 구간 탐색에 몇 초 정도 소요될 수 있습니다... ⏳</div>
 
     <div class="table-wrapper">
         <table id="resultTable" style="display: none;">
@@ -238,7 +242,7 @@
                     <th>최신 데이터</th>
                     <th>전체 경과일</th>
                     <th>최장 물림일수</th>
-                    <th>최장 물림 기간</th>
+                    <th>최장 물림기간</th>
                     <th>CAGR (수익률)</th>
                 </tr>
             </thead>
@@ -294,7 +298,6 @@
 
     async function fetchRawData(ticker) {
         try {
-            // 💡 야후의 데이터 압축 우회: range=max 대신 아주 오래전 시간부터 현재까지를 직접 지정하여 일별 데이터 강제 획득
             const now = Math.floor(Date.now() / 1000);
             const past = -2208988800; // 1900년 1월 1일 (가장 먼 과거 지정)
             const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?period1=${past}&period2=${now}&interval=1d`;
@@ -367,6 +370,9 @@
         chartDataStore = {}; 
 
         try {
+            // 이 시점에 로딩 메시지가 그려지도록 약간 대기
+            await new Promise(r => setTimeout(r, 50)); 
+            
             const rawDataArray = await Promise.all(tickers.map(fetchRawData));
             let commonStartTime = -1;
 
@@ -377,6 +383,7 @@
                 }
             }
 
+            // 고속 연산 로직 (Drawdown + CAGR Top 검색)
             const results = rawDataArray.map(raw => calculateMetrics(raw, commonStartTime));
 
             results.forEach(res => {
@@ -401,11 +408,16 @@
                         <td>
                             <div class="highlight-drawdown">
                                 <span>${res.top1.days > 0 ? `${yearsStr}년 (${Math.round(res.top1.days).toLocaleString()}일)` : '0년'}</span>
-                                <button class="chart-btn" onclick="openChartModal('${res.ticker}')">[차트]</button>
+                                <button class="chart-btn" onclick="openChartModal('${res.ticker}', 'drawdown')">[차트]</button>
                             </div>
                         </td>
                         <td style="font-size: 0.9em; color: #555;">${periodStr}</td>
-                        <td class="highlight-cagr">${cagrPercent}%</td>
+                        <td>
+                            <div class="highlight-cagr">
+                                <span>${cagrPercent}%</span>
+                                <button class="chart-btn" onclick="openChartModal('${res.ticker}', 'cagr')">[차트]</button>
+                            </div>
+                        </td>
                     </tr>
                 `;
             });
@@ -427,7 +439,6 @@
         const closePrices = raw.closePrices;
 
         let firstIdx = 0;
-        
         if (commonStartTime !== -1) {
             while (firstIdx < timestamps.length && timestamps[firstIdx] < commonStartTime) {
                 firstIdx++;
@@ -435,7 +446,6 @@
         }
 
         if (firstIdx >= closePrices.length) return { ticker: raw.ticker, error: true }; 
-
         const lastIdx = closePrices.length - 1;
         if (firstIdx >= lastIdx) return { ticker: raw.ticker, error: true }; 
 
@@ -443,10 +453,12 @@
         const lastTime = timestamps[lastIdx];
         const firstPrice = closePrices[firstIdx];
         const lastPrice = closePrices[lastIdx];
+        const totalDuration = lastTime - firstTime;
 
-        const daysDiff = (lastTime - firstTime) / 86400;
+        const daysDiff = totalDuration / 86400;
         const cagr = daysDiff > 0 ? Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1 : 0;
 
+        // --- 1. 물림기간(Drawdown) 분석 ---
         let drawdowns = [];
         let currentPeakPrice = -1;
         let currentPeakTime = -1;
@@ -481,7 +493,6 @@
         if (currentDrawdownMaxDays > 0) {
             drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
         }
-
         drawdowns.sort((a, b) => b.days - a.days);
 
         const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
@@ -492,9 +503,67 @@
         top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
         top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
 
-        const totalDuration = lastTime - firstTime;
         top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
         top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+
+        // --- 2. 최고 수익(CAGR) 구간 분석 (1년 이상 구간 발굴 O(N^2)) ---
+        let cagrTop1 = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
+        let cagrTop2 = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
+        
+        let bestCagr1 = -Infinity;
+        let b1_i = -1, b1_j = -1;
+
+        // 패스 1: 1위 찾기 (최소 250영업일 ≈ 1년)
+        for(let i = firstIdx; i <= lastIdx; i++) {
+            for(let j = i + 250; j <= lastIdx; j++) { 
+                const days = (timestamps[j] - timestamps[i]) / 86400;
+                if (days >= 365.2425) {
+                    const c = Math.pow(closePrices[j] / closePrices[i], 365.2425 / days) - 1;
+                    if (c > bestCagr1) {
+                        bestCagr1 = c;
+                        b1_i = i;
+                        b1_j = j;
+                    }
+                }
+            }
+        }
+
+        if (b1_i !== -1) {
+            cagrTop1.valid = true;
+            cagrTop1.cagr = bestCagr1;
+            cagrTop1.startStr = chartLabels[b1_i - firstIdx];
+            cagrTop1.endStr = chartLabels[b1_j - firstIdx];
+            cagrTop1.labelAlign = (totalDuration > 0 && ((timestamps[b1_i] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+
+            // 패스 2: 1위와 겹치지 않는 2위 찾기
+            let bestCagr2 = -Infinity;
+            let b2_i = -1, b2_j = -1;
+
+            for(let i = firstIdx; i <= lastIdx; i++) {
+                for(let j = i + 250; j <= lastIdx; j++) {
+                    // 1위 구간과 날짜가 겹치면 무시
+                    if (i <= b1_j && j >= b1_i) continue; 
+                    
+                    const days = (timestamps[j] - timestamps[i]) / 86400;
+                    if (days >= 365.2425) {
+                        const c = Math.pow(closePrices[j] / closePrices[i], 365.2425 / days) - 1;
+                        if (c > bestCagr2) {
+                            bestCagr2 = c;
+                            b2_i = i;
+                            b2_j = j;
+                        }
+                    }
+                }
+            }
+
+            if (b2_i !== -1) {
+                cagrTop2.valid = true;
+                cagrTop2.cagr = bestCagr2;
+                cagrTop2.startStr = chartLabels[b2_i - firstIdx];
+                cagrTop2.endStr = chartLabels[b2_j - firstIdx];
+                cagrTop2.labelAlign = (totalDuration > 0 && ((timestamps[b2_i] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+            }
+        }
 
         const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
         const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
@@ -504,7 +573,9 @@
             dataPoints: chartDataPoints,
             stockName: raw.stockName,
             top1: top1,
-            top2: top2
+            top2: top2,
+            cagrTop1: cagrTop1,
+            cagrTop2: cagrTop2
         };
 
         return {
@@ -514,7 +585,8 @@
         };
     }
 
-    function openChartModal(ticker) {
+    // 모달을 열 때, 'drawdown' 모드인지 'cagr' 모드인지 type 변수로 구분하여 차트를 그립니다.
+    function openChartModal(ticker, type) {
         const modal = document.getElementById('chartModal');
         const title = document.getElementById('modalTitle');
         const ctx = document.getElementById('priceChart').getContext('2d');
@@ -522,49 +594,66 @@
 
         if (!chartData) return;
 
-        title.innerHTML = `${chartData.stockName} (${ticker}) 수정종가 흐름 및 물림구간`;
-        modal.style.display = 'block';
-
         if (myChartInstance) {
             myChartInstance.destroy();
         }
 
         const annotations = {};
-        if (chartData.top1.days > 0) {
-            annotations.box1 = {
-                type: 'box',
-                xMin: chartData.top1.startStr,
-                xMax: chartData.top1.endStr,
-                backgroundColor: 'rgba(231, 76, 60, 0.25)', 
-                borderWidth: 0,
-                label: {
-                    display: true,
-                    content: `1위 (${(chartData.top1.days/365.2425).toFixed(2)}년)`,
-                    position: { x: chartData.top1.labelAlign, y: 'start' },
-                    color: 'black',
-                    backgroundColor: 'rgba(255, 255, 255, 0.7)',
-                    font: { size: 13, weight: 'bold' }
-                }
-            };
+        
+        if (type === 'drawdown') {
+            title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#e74c3c">최장 물림기간</span>`;
+            
+            if (chartData.top1.days > 0) {
+                annotations.box1 = {
+                    type: 'box', xMin: chartData.top1.startStr, xMax: chartData.top1.endStr,
+                    backgroundColor: 'rgba(231, 76, 60, 0.25)', borderWidth: 0,
+                    label: {
+                        display: true, content: `1위 (${(chartData.top1.days/365.2425).toFixed(2)}년)`,
+                        position: { x: chartData.top1.labelAlign, y: 'start' }, color: 'black',
+                        backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
+                    }
+                };
+            }
+            if (chartData.top2.days > 0) {
+                annotations.box2 = {
+                    type: 'box', xMin: chartData.top2.startStr, xMax: chartData.top2.endStr,
+                    backgroundColor: 'rgba(243, 156, 18, 0.25)', borderWidth: 0,
+                    label: {
+                        display: true, content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
+                        position: { x: chartData.top2.labelAlign, y: 'start' }, yAdjust: 32, // 겹침 방지
+                        color: 'black', backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
+                    }
+                };
+            }
+        } 
+        else if (type === 'cagr') {
+            title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">최고 수익구간(1년 이상)</span>`;
+            
+            if (chartData.cagrTop1.valid) {
+                annotations.box1 = {
+                    type: 'box', xMin: chartData.cagrTop1.startStr, xMax: chartData.cagrTop1.endStr,
+                    backgroundColor: 'rgba(46, 204, 113, 0.25)', borderWidth: 0, // 초록색 강조
+                    label: {
+                        display: true, content: `1위 (${(chartData.cagrTop1.cagr * 100).toFixed(1)}%)`,
+                        position: { x: chartData.cagrTop1.labelAlign, y: 'start' }, color: 'black',
+                        backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
+                    }
+                };
+            }
+            if (chartData.cagrTop2.valid) {
+                annotations.box2 = {
+                    type: 'box', xMin: chartData.cagrTop2.startStr, xMax: chartData.cagrTop2.endStr,
+                    backgroundColor: 'rgba(52, 152, 219, 0.25)', borderWidth: 0, // 파란색 강조
+                    label: {
+                        display: true, content: `2위 (${(chartData.cagrTop2.cagr * 100).toFixed(1)}%)`,
+                        position: { x: chartData.cagrTop2.labelAlign, y: 'start' }, yAdjust: 32, // 겹침 방지
+                        color: 'black', backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
+                    }
+                };
+            }
         }
-        if (chartData.top2.days > 0) {
-            annotations.box2 = {
-                type: 'box',
-                xMin: chartData.top2.startStr,
-                xMax: chartData.top2.endStr,
-                backgroundColor: 'rgba(243, 156, 18, 0.25)', 
-                borderWidth: 0,
-                label: {
-                    display: true,
-                    content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
-                    position: { x: chartData.top2.labelAlign, y: 'start' },
-                    yAdjust: 32, // 💡 1위 라벨과 겹치지 않게 밑으로 32픽셀 이동
-                    color: 'black',
-                    backgroundColor: 'rgba(255, 255, 255, 0.7)',
-                    font: { size: 13, weight: 'bold' }
-                }
-            };
-        }
+
+        modal.style.display = 'block';
 
         myChartInstance = new Chart(ctx, {
             type: 'line',
@@ -595,19 +684,12 @@
                 scales: {
                     x: { 
                         type: 'time',
-                        time: {
-                            unit: 'year',
-                            displayFormats: { year: 'yyyy' }
-                        },
+                        time: { unit: 'year', displayFormats: { year: 'yyyy' } },
                         ticks: { maxRotation: 0 }
                     },
                     y: { 
                         type: 'logarithmic',
-                        ticks: { 
-                            callback: function(value) { 
-                                return '$' + value.toLocaleString(); 
-                            } 
-                        }
+                        ticks: { callback: function(value) { return '$' + value.toLocaleString(); } }
                     }
                 }
             }
