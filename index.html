@@ -455,7 +455,7 @@
         const daysDiff = totalDuration / 86400;
         const cagr = daysDiff > 0 ? Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1 : 0;
 
-        // --- 1. 최장 물림기간(Drawdown) 분석 ---
+        // --- 1. 최장 물림기간(Drawdown Duration) 분석 (표 표시용 1, 2위) ---
         let drawdowns = [];
         let currentPeakPrice = -1;
         let currentPeakTime = -1;
@@ -490,6 +490,8 @@
         if (currentDrawdownMaxDays > 0) {
             drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
         }
+        
+        // 기간 기준 내림차순 정렬
         drawdowns.sort((a, b) => b.days - a.days);
 
         const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
@@ -503,26 +505,48 @@
         top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
         top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
 
-        // --- 2. 폭락장 바닥 기반 최고 수익(CAGR) 스캔 알고리즘 ---
-        // 특정 기간 내의 '최저점(바닥) 인덱스'를 찾는 헬퍼 함수
-        function getMinIdx(startTime, endTime) {
-            if (startTime === endTime) return -1;
-            let minP = Infinity;
-            let minI = -1;
-            for (let i = firstIdx; i <= lastIdx; i++) {
-                if (timestamps[i] >= startTime && timestamps[i] <= endTime) {
-                    if (closePrices[i] < minP) {
-                        minP = closePrices[i];
-                        minI = i;
-                    }
+        // --- 2. MDD 기반 최고 수익률(CAGR) 스캔 알고리즘 ---
+        // 에피소드(신고가 갱신과 갱신 사이) 기록
+        let episodes = [];
+        let peakP = -1;
+        let peakI = -1;
+        let epMinP = Infinity;
+        let epMinI = -1;
+
+        for (let i = firstIdx; i <= lastIdx; i++) {
+            const price = closePrices[i];
+            
+            if (price >= peakP) {
+                // 신고가 갱신: 이전 에피소드가 존재하고 하락이 있었다면 저장 (한 에피소드 당 1개 바닥만)
+                if (peakI !== -1 && epMinI !== -1 && peakP > epMinP) {
+                    const dropPercent = (peakP - epMinP) / peakP;
+                    episodes.push({ troughIdx: epMinI, drop: dropPercent });
+                }
+                // 새로운 에피소드 초기화
+                peakP = price;
+                peakI = i;
+                epMinP = price;
+                epMinI = i;
+            } else {
+                // 신고가 밑에서 물려있는 중 (신저점 갱신 확인)
+                if (price < epMinP) {
+                    epMinP = price;
+                    epMinI = i;
                 }
             }
-            return minI;
+        }
+        // 마지막 진행 중인 에피소드 마감
+        if (peakI !== -1 && epMinI !== -1 && peakP > epMinP) {
+            const dropPercent = (peakP - epMinP) / peakP;
+            episodes.push({ troughIdx: epMinI, drop: dropPercent });
         }
 
-        // 주어진 최저점 인덱스에서 1년 이상인 지점 중 최고 CAGR을 구하는 헬퍼 함수
+        // 낙폭(MDD)이 가장 컸던 순서대로 정렬하여 상위 10개 에피소드 추출
+        episodes.sort((a, b) => b.drop - a.drop);
+        const top10Troughs = episodes.slice(0, 10).map(ep => ep.troughIdx);
+
+        // 주어진 최저점 인덱스에서 1년 이상 경과 시점 중 최고 CAGR을 구하는 헬퍼 함수
         function getBestCagrFrom(sIdx) {
-            if (sIdx === -1) return { valid: false };
             let bCagr = -Infinity;
             let bIdx = -1;
             for (let j = sIdx + 1; j <= lastIdx; j++) {
@@ -541,21 +565,16 @@
             return { valid: false };
         }
 
-        // 1위, 2위 물림구간 내부의 '진짜 바닥' 인덱스 찾기
-        let mIdx1 = -1, mIdx2 = -1;
-        if (top1.days > 0) mIdx1 = getMinIdx(top1.start, top1.end);
-        if (top2.days > 0) mIdx2 = getMinIdx(top2.start, top2.end);
-
-        // 각 바닥에서 출발하는 최고 CAGR 구간 탐색
-        let cand1 = getBestCagrFrom(mIdx1);
-        let cand2 = getBestCagrFrom(mIdx2);
-
-        // 유효한 구간을 모아서 비교(랭킹)
+        // Top 10 바닥에서 출발하는 성공 시나리오 계산
         let cagrCandidates = [];
-        if (cand1.valid) cagrCandidates.push(cand1);
-        if (cand2.valid) cagrCandidates.push(cand2);
+        for (let tIdx of top10Troughs) {
+            let cand = getBestCagrFrom(tIdx);
+            if (cand.valid) {
+                cagrCandidates.push(cand);
+            }
+        }
         
-        // CAGR이 높은 순으로 정렬하여 1위, 2위 선정
+        // 시나리오 중 CAGR이 가장 높은 순으로 정렬하여 최종 1, 2위 선정
         cagrCandidates.sort((a, b) => b.cagr - a.cagr);
 
         let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
@@ -642,7 +661,7 @@
         } 
         // 2) [바닥 줍기 - 최고 수익률 CAGR] 차트 뷰
         else if (type === 'cagr') {
-            title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">폭락장 바닥 대비 최고 CAGR 구간</span>`;
+            title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">MDD 바닥 대비 최고 CAGR 구간</span>`;
             
             if (chartData.cagrTop1.valid) {
                 annotations.box1 = {
