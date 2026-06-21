@@ -230,7 +230,7 @@
         <button id="btnSame" class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
     </div>
 
-    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 구간 탐색 중입니다... ⏳</div>
+    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 최적 구간 탐색 중입니다... ⏳</div>
 
     <div class="table-wrapper">
         <table id="resultTable" style="display: none;">
@@ -412,7 +412,7 @@
                         <td>
                             <div class="highlight-cagr">
                                 <span>${cagrPercent}%</span>
-                                <button class="chart-btn" onclick="openChartModal('${res.ticker}', 'return')">[차트]</button>
+                                <button class="chart-btn" onclick="openChartModal('${res.ticker}', 'cagr')">[차트]</button>
                             </div>
                         </td>
                     </tr>
@@ -503,64 +503,80 @@
         top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
         top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
 
-
-        // --- 2. 최고 수익률(Total Return) 구간 O(N) 고속 분석 알고리즘 ---
-        // 특정 인덱스 구간 안에서 최소 1년 이상 유지되며, 수익률이 가장 컸던 (신저점 -> 신고점) 구간을 찾습니다.
-        function findBestReturn(startI, endI) {
-            let bestRet = -Infinity;
-            let b_i = -1, b_j = -1;
-            if (startI < 0 || endI < 0 || startI >= endI) return { bestRet, b_i, b_j };
-
-            let k = startI;
-            let current_min_idx = startI;
-            
-            for (let j = startI; j <= endI; j++) {
-                // 1년(365.2425일) 이상 차이나는 조건을 만족하도록 k(과거 비교점) 전진
-                while (k < j && (timestamps[j] - timestamps[k]) >= 365.2425 * 86400) {
-                    if (closePrices[k] < closePrices[current_min_idx]) {
-                        current_min_idx = k; // 가장 낮았던 가격(신저점) 위치 갱신
-                    }
-                    k++;
-                }
-                
-                // k가 한 번이라도 전진했다면(즉, 1년 이상 구간이 성립된다면)
-                if (k > startI) {
-                    let ret = (closePrices[j] / closePrices[current_min_idx]) - 1;
-                    if (ret > bestRet) {
-                        bestRet = ret;
-                        b_i = current_min_idx;
-                        b_j = j;
+        // --- 2. 폭락장 바닥 기반 최고 수익(CAGR) 스캔 알고리즘 ---
+        // 특정 기간 내의 '최저점(바닥) 인덱스'를 찾는 헬퍼 함수
+        function getMinIdx(startTime, endTime) {
+            if (startTime === endTime) return -1;
+            let minP = Infinity;
+            let minI = -1;
+            for (let i = firstIdx; i <= lastIdx; i++) {
+                if (timestamps[i] >= startTime && timestamps[i] <= endTime) {
+                    if (closePrices[i] < minP) {
+                        minP = closePrices[i];
+                        minI = i;
                     }
                 }
             }
-            return { bestRet, b_i, b_j };
+            return minI;
         }
 
-        let retTop1Obj = { valid: false, startStr: '', endStr: '', ret: 0, labelAlign: 'start' };
-        let retTop2Obj = { valid: false, startStr: '', endStr: '', ret: 0, labelAlign: 'start' };
-
-        // 1위 구간 찾기
-        let firstPlace = findBestReturn(firstIdx, lastIdx);
-        if (firstPlace.b_i !== -1) {
-            retTop1Obj.valid = true;
-            retTop1Obj.ret = firstPlace.bestRet;
-            retTop1Obj.startStr = chartLabels[firstPlace.b_i - firstIdx];
-            retTop1Obj.endStr = chartLabels[firstPlace.b_j - firstIdx];
-            retTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[firstPlace.b_i] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
-
-            // 1위 구간과 겹치지 않는(비수열) 2위 구간 찾기 (1위 기준 좌측 vs 우측)
-            let leftTop = findBestReturn(firstIdx, firstPlace.b_i - 1);
-            let rightTop = findBestReturn(firstPlace.b_j + 1, lastIdx);
-            
-            let secondPlace = leftTop.bestRet > rightTop.bestRet ? leftTop : rightTop;
-
-            if (secondPlace.b_i !== -1) {
-                retTop2Obj.valid = true;
-                retTop2Obj.ret = secondPlace.bestRet;
-                retTop2Obj.startStr = chartLabels[secondPlace.b_i - firstIdx];
-                retTop2Obj.endStr = chartLabels[secondPlace.b_j - firstIdx];
-                retTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[secondPlace.b_i] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+        // 주어진 최저점 인덱스에서 1년 이상인 지점 중 최고 CAGR을 구하는 헬퍼 함수
+        function getBestCagrFrom(sIdx) {
+            if (sIdx === -1) return { valid: false };
+            let bCagr = -Infinity;
+            let bIdx = -1;
+            for (let j = sIdx + 1; j <= lastIdx; j++) {
+                const d = (timestamps[j] - timestamps[sIdx]) / 86400;
+                if (d >= 365.2425) { // 최소기간 1년 이상
+                    const c = Math.pow(closePrices[j] / closePrices[sIdx], 365.2425 / d) - 1;
+                    if (c > bCagr) {
+                        bCagr = c;
+                        bIdx = j;
+                    }
+                }
             }
+            if (bIdx !== -1) {
+                return { valid: true, cagr: bCagr, sIdx: sIdx, eIdx: bIdx };
+            }
+            return { valid: false };
+        }
+
+        // 1위, 2위 물림구간 내부의 '진짜 바닥' 인덱스 찾기
+        let mIdx1 = -1, mIdx2 = -1;
+        if (top1.days > 0) mIdx1 = getMinIdx(top1.start, top1.end);
+        if (top2.days > 0) mIdx2 = getMinIdx(top2.start, top2.end);
+
+        // 각 바닥에서 출발하는 최고 CAGR 구간 탐색
+        let cand1 = getBestCagrFrom(mIdx1);
+        let cand2 = getBestCagrFrom(mIdx2);
+
+        // 유효한 구간을 모아서 비교(랭킹)
+        let cagrCandidates = [];
+        if (cand1.valid) cagrCandidates.push(cand1);
+        if (cand2.valid) cagrCandidates.push(cand2);
+        
+        // CAGR이 높은 순으로 정렬하여 1위, 2위 선정
+        cagrCandidates.sort((a, b) => b.cagr - a.cagr);
+
+        let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
+        let cagrTop2Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
+
+        if (cagrCandidates.length > 0) {
+            let win1 = cagrCandidates[0];
+            cagrTop1Obj.valid = true;
+            cagrTop1Obj.cagr = win1.cagr;
+            cagrTop1Obj.startStr = chartLabels[win1.sIdx - firstIdx];
+            cagrTop1Obj.endStr = chartLabels[win1.eIdx - firstIdx];
+            cagrTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[win1.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+        }
+        
+        if (cagrCandidates.length > 1) {
+            let win2 = cagrCandidates[1];
+            cagrTop2Obj.valid = true;
+            cagrTop2Obj.cagr = win2.cagr;
+            cagrTop2Obj.startStr = chartLabels[win2.sIdx - firstIdx];
+            cagrTop2Obj.endStr = chartLabels[win2.eIdx - firstIdx];
+            cagrTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[win2.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
         }
 
         const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
@@ -572,8 +588,8 @@
             stockName: raw.stockName,
             top1: top1,
             top2: top2,
-            retTop1: retTop1Obj,
-            retTop2: retTop2Obj
+            cagrTop1: cagrTop1Obj,
+            cagrTop2: cagrTop2Obj
         };
 
         return {
@@ -618,34 +634,34 @@
                     backgroundColor: 'rgba(243, 156, 18, 0.25)', borderWidth: 0,
                     label: {
                         display: true, content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
-                        position: { x: chartData.top2.labelAlign, y: 'start' }, yAdjust: 32, // 글씨 겹침 방지 (한 칸 아래로)
+                        position: { x: chartData.top2.labelAlign, y: 'start' }, yAdjust: 32, // 글씨 겹침 방지
                         color: 'black', backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
                     }
                 };
             }
         } 
-        // 2) [최고 수익률] 차트 뷰
-        else if (type === 'return') {
-            title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">최고 수익률 (황금 구간, 1년 이상)</span>`;
+        // 2) [바닥 줍기 - 최고 수익률 CAGR] 차트 뷰
+        else if (type === 'cagr') {
+            title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">폭락장 바닥 대비 최고 CAGR 구간</span>`;
             
-            if (chartData.retTop1.valid) {
+            if (chartData.cagrTop1.valid) {
                 annotations.box1 = {
-                    type: 'box', xMin: chartData.retTop1.startStr, xMax: chartData.retTop1.endStr,
+                    type: 'box', xMin: chartData.cagrTop1.startStr, xMax: chartData.cagrTop1.endStr,
                     backgroundColor: 'rgba(46, 204, 113, 0.25)', borderWidth: 0, // 1위 초록색
                     label: {
-                        display: true, content: `1위 (+${(chartData.retTop1.ret * 100).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}%)`,
-                        position: { x: chartData.retTop1.labelAlign, y: 'start' }, color: 'black',
+                        display: true, content: `1위 (CAGR +${(chartData.cagrTop1.cagr * 100).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}%)`,
+                        position: { x: chartData.cagrTop1.labelAlign, y: 'start' }, color: 'black',
                         backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
                     }
                 };
             }
-            if (chartData.retTop2.valid) {
+            if (chartData.cagrTop2.valid) {
                 annotations.box2 = {
-                    type: 'box', xMin: chartData.retTop2.startStr, xMax: chartData.retTop2.endStr,
+                    type: 'box', xMin: chartData.cagrTop2.startStr, xMax: chartData.cagrTop2.endStr,
                     backgroundColor: 'rgba(52, 152, 219, 0.25)', borderWidth: 0, // 2위 파란색
                     label: {
-                        display: true, content: `2위 (+${(chartData.retTop2.ret * 100).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}%)`,
-                        position: { x: chartData.retTop2.labelAlign, y: 'start' }, yAdjust: 32, // 글씨 겹침 방지 (한 칸 아래로)
+                        display: true, content: `2위 (CAGR +${(chartData.cagrTop2.cagr * 100).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}%)`,
+                        position: { x: chartData.cagrTop2.labelAlign, y: 'start' }, yAdjust: 32, // 글씨 겹침 방지
                         color: 'black', backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
                     }
                 };
