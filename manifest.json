@@ -1,7 +1,7 @@
 {
-  "name": "주식 퀀트 분석기",
+  "name": "주식 CAGR 분석기",
   "short_name": "주식분석기",
-  "description": "MDD 및 CAGR 기반 주식 시뮬레이터",
+  "description": "MDD 기반 주식 시뮬레이터",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f4f7f6",
@@ -9,7 +9,7 @@
   "icons": [
     {
       "src": "icon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
+      "sizes": "64x64",
       "type": "image/x-icon"
     },
     {
