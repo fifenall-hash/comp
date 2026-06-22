@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>📈 주식 CAGR & 최장 물림구간 비교</title>
+    
+    <link rel="icon" href="icon.ico" type="image/x-icon">
+    <link rel="apple-touch-icon" href="icon.ico">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#27ae60">
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0"></script>
@@ -491,7 +497,6 @@
             drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
         }
         
-        // 기간 기준 내림차순 정렬
         drawdowns.sort((a, b) => b.days - a.days);
 
         const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
@@ -506,7 +511,6 @@
         top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
 
         // --- 2. MDD 기반 최고 수익률(CAGR) 스캔 알고리즘 ---
-        // 에피소드(신고가 갱신과 갱신 사이) 기록
         let episodes = [];
         let peakP = -1;
         let peakI = -1;
@@ -517,41 +521,36 @@
             const price = closePrices[i];
             
             if (price >= peakP) {
-                // 신고가 갱신: 이전 에피소드가 존재하고 하락이 있었다면 저장 (한 에피소드 당 1개 바닥만)
                 if (peakI !== -1 && epMinI !== -1 && peakP > epMinP) {
                     const dropPercent = (peakP - epMinP) / peakP;
                     episodes.push({ troughIdx: epMinI, drop: dropPercent });
                 }
-                // 새로운 에피소드 초기화
                 peakP = price;
                 peakI = i;
                 epMinP = price;
                 epMinI = i;
             } else {
-                // 신고가 밑에서 물려있는 중 (신저점 갱신 확인)
                 if (price < epMinP) {
                     epMinP = price;
                     epMinI = i;
                 }
             }
         }
-        // 마지막 진행 중인 에피소드 마감
         if (peakI !== -1 && epMinI !== -1 && peakP > epMinP) {
             const dropPercent = (peakP - epMinP) / peakP;
             episodes.push({ troughIdx: epMinI, drop: dropPercent });
         }
 
-        // 낙폭(MDD)이 가장 컸던 순서대로 정렬하여 상위 10개 에피소드 추출
+        // 낙폭(MDD)이 가장 컸던 순서대로 정렬하여 상위 10개 추출
         episodes.sort((a, b) => b.drop - a.drop);
         const top10Troughs = episodes.slice(0, 10).map(ep => ep.troughIdx);
 
-        // 주어진 최저점 인덱스에서 1년 이상 경과 시점 중 최고 CAGR을 구하는 헬퍼 함수
         function getBestCagrFrom(sIdx) {
             let bCagr = -Infinity;
             let bIdx = -1;
             for (let j = sIdx + 1; j <= lastIdx; j++) {
                 const d = (timestamps[j] - timestamps[sIdx]) / 86400;
-                if (d >= 365.2425) { // 최소기간 1년 이상
+                if (d >= 365.2425) { 
                     const c = Math.pow(closePrices[j] / closePrices[sIdx], 365.2425 / d) - 1;
                     if (c > bCagr) {
                         bCagr = c;
@@ -565,7 +564,6 @@
             return { valid: false };
         }
 
-        // Top 10 바닥에서 출발하는 성공 시나리오 계산
         let cagrCandidates = [];
         for (let tIdx of top10Troughs) {
             let cand = getBestCagrFrom(tIdx);
@@ -574,7 +572,6 @@
             }
         }
         
-        // 시나리오 중 CAGR이 가장 높은 순으로 정렬하여 최종 1, 2위 선정
         cagrCandidates.sort((a, b) => b.cagr - a.cagr);
 
         let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
@@ -632,7 +629,6 @@
 
         const annotations = {};
         
-        // 1) [최장 물림기간] 차트 뷰
         if (type === 'drawdown') {
             title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#e74c3c">최장 물림기간 (고통 구간)</span>`;
             
@@ -653,20 +649,19 @@
                     backgroundColor: 'rgba(243, 156, 18, 0.25)', borderWidth: 0,
                     label: {
                         display: true, content: `2위 (${(chartData.top2.days/365.2425).toFixed(2)}년)`,
-                        position: { x: chartData.top2.labelAlign, y: 'start' }, yAdjust: 32, // 글씨 겹침 방지
+                        position: { x: chartData.top2.labelAlign, y: 'start' }, yAdjust: 32, 
                         color: 'black', backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
                     }
                 };
             }
         } 
-        // 2) [바닥 줍기 - 최고 수익률 CAGR] 차트 뷰
         else if (type === 'cagr') {
             title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">MDD 바닥 대비 최고 CAGR 구간</span>`;
             
             if (chartData.cagrTop1.valid) {
                 annotations.box1 = {
                     type: 'box', xMin: chartData.cagrTop1.startStr, xMax: chartData.cagrTop1.endStr,
-                    backgroundColor: 'rgba(46, 204, 113, 0.25)', borderWidth: 0, // 1위 초록색
+                    backgroundColor: 'rgba(46, 204, 113, 0.25)', borderWidth: 0, 
                     label: {
                         display: true, content: `1위 (CAGR +${(chartData.cagrTop1.cagr * 100).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}%)`,
                         position: { x: chartData.cagrTop1.labelAlign, y: 'start' }, color: 'black',
@@ -677,10 +672,10 @@
             if (chartData.cagrTop2.valid) {
                 annotations.box2 = {
                     type: 'box', xMin: chartData.cagrTop2.startStr, xMax: chartData.cagrTop2.endStr,
-                    backgroundColor: 'rgba(52, 152, 219, 0.25)', borderWidth: 0, // 2위 파란색
+                    backgroundColor: 'rgba(52, 152, 219, 0.25)', borderWidth: 0, 
                     label: {
                         display: true, content: `2위 (CAGR +${(chartData.cagrTop2.cagr * 100).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}%)`,
-                        position: { x: chartData.cagrTop2.labelAlign, y: 'start' }, yAdjust: 32, // 글씨 겹침 방지
+                        position: { x: chartData.cagrTop2.labelAlign, y: 'start' }, yAdjust: 32, 
                         color: 'black', backgroundColor: 'rgba(255, 255, 255, 0.7)', font: { size: 13, weight: 'bold' }
                     }
                 };
@@ -737,6 +732,19 @@
     window.onclick = function(event) {
         const modal = document.getElementById('chartModal');
         if (event.target == modal) closeChartModal();
+    }
+
+    // PWA 서비스 워커 등록
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .then(registration => {
+                    console.log('ServiceWorker 등록 성공! 범위:', registration.scope);
+                })
+                .catch(err => {
+                    console.log('ServiceWorker 등록 실패:', err);
+                });
+        });
     }
 </script>
 
