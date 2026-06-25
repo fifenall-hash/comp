@@ -177,9 +177,11 @@
             display: none;
         }
         
+        /* 테이블 안 요소 정렬 보정 */
         .highlight-drawdown { display: flex; align-items: center; justify-content: flex-end; color: var(--danger-color); font-weight: bold; }
         .highlight-cagr { display: flex; align-items: center; justify-content: flex-end; color: var(--primary-color); font-weight: bold; font-size: 1.1em; }
         
+        /* 모달 팝업 스타일 */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); }
         .modal-content {
             background-color: #fff; margin: 5% auto; padding: 20px; border-radius: 10px;
@@ -527,8 +529,9 @@
             top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
             top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
 
-            top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
-            top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+            // 💡 텍스트 짤림 방지: 구간의 [끝점(end)]이 차트의 50%를 넘어가면 우측으로 글씨가 정렬되도록 개선
+            top1.labelAlign = (totalDuration > 0 && ((top1.end - firstTime) / totalDuration) > 0.5) ? 'end' : 'start';
+            top2.labelAlign = (totalDuration > 0 && ((top2.end - firstTime) / totalDuration) > 0.5) ? 'end' : 'start';
 
             // --- 2. MDD 기반 및 역MDD 기반 후보 쌍(Pairing) 추출 알고리즘 ---
             let mdEpisodes = [];
@@ -615,7 +618,6 @@
             let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
             let cagrTop2Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
 
-            // 💡 여기서 에러의 주범이었던 날짜 변수를 제대로 선언합니다!
             const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
             const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
 
@@ -625,7 +627,8 @@
                 cagrTop1Obj.cagr = win1.cagr;
                 cagrTop1Obj.startStr = chartLabels[win1.sIdx - firstIdx];
                 cagrTop1Obj.endStr = chartLabels[win1.eIdx - firstIdx];
-                cagrTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[win1.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+                // 💡 텍스트 짤림 방지: 구간의 [끝점(end)]이 차트의 50%를 넘어가면 우측으로 글씨가 정렬되도록 개선
+                cagrTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[win1.eIdx] - firstTime) / totalDuration) > 0.5) ? 'end' : 'start';
 
                 for (let i = 1; i < cagrCandidates.length; i++) {
                     let win2 = cagrCandidates[i];
@@ -636,7 +639,8 @@
                     cagrTop2Obj.cagr = win2.cagr;
                     cagrTop2Obj.startStr = chartLabels[win2.sIdx - firstIdx];
                     cagrTop2Obj.endStr = chartLabels[win2.eIdx - firstIdx];
-                    cagrTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[win2.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+                    // 💡 텍스트 짤림 방지: 구간의 [끝점(end)]이 차트의 50%를 넘어가면 우측으로 글씨가 정렬되도록 개선
+                    cagrTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[win2.eIdx] - firstTime) / totalDuration) > 0.5) ? 'end' : 'start';
                     break;
                 }
             }
@@ -786,7 +790,7 @@
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('./sw.js')
                 .then(registration => {
-                    console.log('ServiceWorker 등록 성공 (오프라인 지원):', registration.scope);
+                    console.log('ServiceWorker 등록 성공 (오프라인 지원/백그라운드 통과):', registration.scope);
                 })
                 .catch(err => {
                     console.log('ServiceWorker 등록 실패:', err);
