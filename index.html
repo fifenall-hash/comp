@@ -6,9 +6,6 @@
     <title>📈 주식 CAGR & 최장 물림구간 비교</title>
     
     <link rel="icon" href="icon.ico" type="image/x-icon">
-    <link rel="apple-touch-icon" href="icon.png">
-    <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#27ae60">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
@@ -177,11 +174,9 @@
             display: none;
         }
         
-        /* 테이블 안 요소 정렬 보정 */
         .highlight-drawdown { display: flex; align-items: center; justify-content: flex-end; color: var(--danger-color); font-weight: bold; }
         .highlight-cagr { display: flex; align-items: center; justify-content: flex-end; color: var(--primary-color); font-weight: bold; font-size: 1.1em; }
         
-        /* 모달 팝업 스타일 */
         .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); }
         .modal-content {
             background-color: #fff; margin: 5% auto; padding: 20px; border-radius: 10px;
@@ -236,7 +231,7 @@
         <button id="btnSame" class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
     </div>
 
-    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 딥 밸류 페어링 탐색 중... ⏳</div>
+    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 최적 구간 탐색 중입니다... ⏳</div>
 
     <div class="table-wrapper">
         <table id="resultTable" style="display: none;">
@@ -330,10 +325,12 @@
             const cleanTimestamps = [];
             const cleanPrices = [];
 
+            // 💡 데이터 오염 방어 1: 날짜(t)와 가격(price)이 완벽하게 정상인 경우만 승인
             for (let i = 0; i < rawTimestamps.length; i++) {
+                const t = rawTimestamps[i];
                 const price = rawPrices[i];
-                if (price !== null && price !== undefined && typeof price === 'number' && price > 0) {
-                    cleanTimestamps.push(rawTimestamps[i]);
+                if (t && !isNaN(t) && price !== null && price !== undefined && typeof price === 'number' && price > 0) {
+                    cleanTimestamps.push(t);
                     cleanPrices.push(price);
                 }
             }
@@ -350,7 +347,7 @@
                 error: false
             };
         } catch (err) {
-            console.error(`${ticker} 에러:`, err);
+            console.error(`[${ticker}] 다운로드 에러:`, err);
             return { ticker, error: true };
         }
     }
@@ -391,7 +388,7 @@
 
             results.forEach(res => {
                 if(res.error) {
-                    tbody.innerHTML += `<tr><td><strong>${res.ticker}</strong></td><td colspan="6" style="text-align:center; color:red;">데이터를 불러올 수 없습니다.</td></tr>`;
+                    tbody.innerHTML += `<tr><td><strong>${res.ticker}</strong></td><td colspan="6" style="text-align:center; color:red;">데이터를 계산할 수 없습니다.</td></tr>`;
                     return;
                 }
                 
@@ -425,8 +422,10 @@
                 `;
             });
             table.style.display = 'table';
+            
         } catch (error) {
-            alert('오류가 발생했습니다.');
+            // 💡 팝업 오류 방어: 오류의 상세 내용을 표기하여 추적 가능하도록 수정
+            alert('데이터 처리 중 오류가 발생했습니다: ' + error.message);
             console.error(error);
         } finally {
             btnFull.disabled = false;
@@ -437,204 +436,216 @@
 
     function calculateMetrics(raw, commonStartTime) {
         if (raw.error) return { ticker: raw.ticker, error: true };
-
-        const timestamps = raw.timestamps;
-        const closePrices = raw.closePrices;
-
-        let firstIdx = 0;
-        if (commonStartTime !== -1) {
-            while (firstIdx < timestamps.length && timestamps[firstIdx] < commonStartTime) {
-                firstIdx++;
-            }
-        }
-
-        if (firstIdx >= closePrices.length) return { ticker: raw.ticker, error: true }; 
-        const lastIdx = closePrices.length - 1;
-        if (firstIdx >= lastIdx) return { ticker: raw.ticker, error: true }; 
-
-        const firstTime = timestamps[firstIdx]; 
-        const lastTime = timestamps[lastIdx];
-        const firstPrice = closePrices[firstIdx];
-        const lastPrice = closePrices[lastIdx];
-        const totalDuration = lastTime - firstTime;
-
-        const daysDiff = totalDuration / 86400;
-        const cagr = daysDiff > 0 ? Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1 : 0;
-
-        // --- 1. 최장 물림기간(Drawdown Duration) 분석 ---
-        let drawdowns = [];
-        let currentPeakPrice = -1;
-        let currentPeakTime = -1;
-        let currentDrawdownMaxDays = 0;
-        let currentDrawdownLastTime = -1;
-
-        const chartLabels = [];
-        const chartDataPoints = [];
-
-        for (let i = firstIdx; i <= lastIdx; i++) {
-            const price = closePrices[i];
-            const time = timestamps[i];
-
-            chartLabels.push(new Date(time * 1000).toISOString().split('T')[0]);
-            chartDataPoints.push(price);
-
-            if (price >= currentPeakPrice) {
-                if (currentPeakTime !== -1 && currentDrawdownMaxDays > 0) {
-                    drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
-                }
-                currentPeakPrice = price;
-                currentPeakTime = time;
-                currentDrawdownMaxDays = 0;
-                currentDrawdownLastTime = time;
-            } else {
-                const days = (time - currentPeakTime) / 86400;
-                currentDrawdownMaxDays = days;
-                currentDrawdownLastTime = time;
-            }
-        }
         
-        if (currentDrawdownMaxDays > 0) {
-            drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
-        }
-        
-        drawdowns.sort((a, b) => b.days - a.days);
+        // 💡 데이터 오염 방어 2: 연산 중 알 수 없는 예외 발생 시 해당 종목만 빨간색(에러) 처리
+        try {
+            const timestamps = raw.timestamps;
+            const closePrices = raw.closePrices;
 
-        const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
-        const top2 = drawdowns[1] || { start: firstTime, end: firstTime, days: 0 };
-
-        top1.startStr = new Date(top1.start * 1000).toISOString().split('T')[0];
-        top1.endStr = new Date(top1.end * 1000).toISOString().split('T')[0];
-        top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
-        top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
-
-        top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
-        top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
-
-        // --- 2. MDD / 역MDD 기반 페어링 최고 수익률 구간 추출 ---
-        // [A] MDD 추출 (왼쪽에서 오른쪽)
-        let mdEpisodes = [];
-        let pPrice = -1;
-        let pIdx = -1;
-        let epMinP = Infinity;
-        let epMinIdx = -1;
-
-        for (let i = firstIdx; i <= lastIdx; i++) {
-            const price = closePrices[i];
-            if (price >= pPrice) {
-                if (pIdx !== -1 && epMinIdx !== -1 && pPrice > epMinP) {
-                    mdEpisodes.push({ troughIdx: epMinIdx, drop: (pPrice - epMinP) / pPrice });
-                }
-                pPrice = price; pIdx = i; epMinP = price; epMinIdx = i;
-            } else {
-                if (price < epMinP) {
-                    epMinP = price; epMinIdx = i;
+            let firstIdx = 0;
+            if (commonStartTime !== -1) {
+                while (firstIdx < timestamps.length && timestamps[firstIdx] < commonStartTime) {
+                    firstIdx++;
                 }
             }
-        }
-        if (pIdx !== -1 && epMinIdx !== -1 && pPrice > epMinP) {
-            mdEpisodes.push({ troughIdx: epMinIdx, drop: (pPrice - epMinP) / pPrice });
-        }
-        mdEpisodes.sort((a, b) => b.drop - a.drop);
-        const top10Troughs = mdEpisodes.slice(0, 10).map(ep => ep.troughIdx);
 
-        // [B] 역MDD 추출 (오른쪽에서 왼쪽)
-        let revEpisodes = [];
-        let rMinP = closePrices[lastIdx];
-        let rMinIdx = lastIdx;
-        let rPeakP = closePrices[lastIdx];
-        let rPeakIdx = lastIdx;
+            if (firstIdx >= closePrices.length) return { ticker: raw.ticker, error: true }; 
+            const lastIdx = closePrices.length - 1;
+            if (firstIdx >= lastIdx) return { ticker: raw.ticker, error: true }; 
 
-        for (let i = lastIdx - 1; i >= firstIdx; i--) {
-            const price = closePrices[i];
-            if (price <= rMinP) {
-                if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) {
-                    revEpisodes.push({ peakIdx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
-                }
-                rMinP = price; rMinIdx = i; rPeakP = price; rPeakIdx = i;
-            } else {
-                if (price > rPeakP) {
-                    rPeakP = price; rPeakIdx = i;
+            const firstTime = timestamps[firstIdx]; 
+            const lastTime = timestamps[lastIdx];
+            const firstPrice = closePrices[firstIdx];
+            const lastPrice = closePrices[lastIdx];
+            const totalDuration = lastTime - firstTime;
+
+            const daysDiff = totalDuration / 86400;
+            const cagr = daysDiff > 0 ? Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1 : 0;
+
+            // --- 1. 최장 물림기간(Drawdown Duration) 분석 ---
+            let drawdowns = [];
+            let currentPeakPrice = -1;
+            let currentPeakTime = -1;
+            let currentDrawdownMaxDays = 0;
+            let currentDrawdownLastTime = -1;
+
+            const chartLabels = [];
+            const chartDataPoints = [];
+
+            for (let i = firstIdx; i <= lastIdx; i++) {
+                const price = closePrices[i];
+                const time = timestamps[i];
+
+                chartLabels.push(new Date(time * 1000).toISOString().split('T')[0]);
+                chartDataPoints.push(price);
+
+                if (price >= currentPeakPrice) {
+                    if (currentPeakTime !== -1 && currentDrawdownMaxDays > 0) {
+                        drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
+                    }
+                    currentPeakPrice = price;
+                    currentPeakTime = time;
+                    currentDrawdownMaxDays = 0;
+                    currentDrawdownLastTime = time;
+                } else {
+                    const days = (time - currentPeakTime) / 86400;
+                    currentDrawdownMaxDays = days;
+                    currentDrawdownLastTime = time;
                 }
             }
-        }
-        if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) {
-            revEpisodes.push({ peakIdx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
-        }
-        revEpisodes.sort((a, b) => b.revMdd - a.revMdd);
-        const top10Peaks = revEpisodes.slice(0, 10).map(ep => ep.peakIdx);
+            
+            if (currentDrawdownMaxDays > 0) {
+                drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
+            }
+            
+            drawdowns.sort((a, b) => b.days - a.days);
 
-        // [C] 인접 구간 페어링
-        let pairMap = new Map();
-        
-        for (let T of top10Troughs) {
-            let bestP = -1; let minDist = Infinity;
-            for (let P of top10Peaks) {
-                if (P > T && (timestamps[P] - timestamps[T]) / 86400 >= 365.2425) { 
-                    if (P - T < minDist) { minDist = P - T; bestP = P; }
+            const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
+            const top2 = drawdowns[1] || { start: firstTime, end: firstTime, days: 0 };
+
+            top1.startStr = new Date(top1.start * 1000).toISOString().split('T')[0];
+            top1.endStr = new Date(top1.end * 1000).toISOString().split('T')[0];
+            top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
+            top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
+
+            top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+            top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+
+            // =========================================================================
+            // --- 2. MDD 기반 및 역MDD 기반 후보 쌍(Pairing) 추출 알고리즘 ---
+            // =========================================================================
+
+            // [A] MDD 추출 (왼쪽에서 오른쪽으로 진행)
+            let mdEpisodes = [];
+            let pPrice = -1;
+            let pIdx = -1;
+            let epMinP = Infinity;
+            let epMinIdx = -1;
+
+            for (let i = firstIdx; i <= lastIdx; i++) {
+                const price = closePrices[i];
+                if (price >= pPrice) {
+                    if (pIdx !== -1 && epMinIdx !== -1 && pPrice > epMinP) {
+                        mdEpisodes.push({ troughIdx: epMinIdx, drop: (pPrice - epMinP) / pPrice });
+                    }
+                    pPrice = price; pIdx = i; epMinP = price; epMinIdx = i;
+                } else {
+                    if (price < epMinP) {
+                        epMinP = price; epMinIdx = i;
+                    }
                 }
             }
-            if (bestP !== -1) pairMap.set(`${T}-${bestP}`, { sIdx: T, eIdx: bestP });
-        }
-        
-        for (let P of top10Peaks) {
-            let bestT = -1; let minDist = Infinity;
+            if (pIdx !== -1 && epMinIdx !== -1 && pPrice > epMinP) {
+                mdEpisodes.push({ troughIdx: epMinIdx, drop: (pPrice - epMinP) / pPrice });
+            }
+            mdEpisodes.sort((a, b) => b.drop - a.drop);
+            const top10Troughs = mdEpisodes.slice(0, 10).map(ep => ep.troughIdx);
+
+
+            // [B] 역MDD 추출 (오른쪽에서 왼쪽으로 진행)
+            let revEpisodes = [];
+            let rMinP = closePrices[lastIdx];
+            let rMinIdx = lastIdx;
+            let rPeakP = closePrices[lastIdx];
+            let rPeakIdx = lastIdx;
+
+            for (let i = lastIdx - 1; i >= firstIdx; i--) {
+                const price = closePrices[i];
+                if (price <= rMinP) { 
+                    if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) {
+                        revEpisodes.push({ peakIdx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
+                    }
+                    rMinP = price; rMinIdx = i; rPeakP = price; rPeakIdx = i;
+                } else {
+                    if (price > rPeakP) {
+                        rPeakP = price; rPeakIdx = i;
+                    }
+                }
+            }
+            if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) {
+                revEpisodes.push({ peakIdx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
+            }
+            revEpisodes.sort((a, b) => b.revMdd - a.revMdd);
+            const top10Peaks = revEpisodes.slice(0, 10).map(ep => ep.peakIdx);
+
+
+            // [C] 가장 인접한 둘 끼리 엮어 시나리오 구성
+            let pairMap = new Map();
+            
             for (let T of top10Troughs) {
-                if (P > T && (timestamps[P] - timestamps[T]) / 86400 >= 365.2425) {
-                    if (P - T < minDist) { minDist = P - T; bestT = T; }
+                let bestP = -1; let minDist = Infinity;
+                for (let P of top10Peaks) {
+                    if (P > T && (timestamps[P] - timestamps[T]) / 86400 >= 365.2425) { 
+                        if (P - T < minDist) { minDist = P - T; bestP = P; }
+                    }
+                }
+                if (bestP !== -1) pairMap.set(`${T}-${bestP}`, { sIdx: T, eIdx: bestP });
+            }
+            
+            for (let P of top10Peaks) {
+                let bestT = -1; let minDist = Infinity;
+                for (let T of top10Troughs) {
+                    if (P > T && (timestamps[P] - timestamps[T]) / 86400 >= 365.2425) {
+                        if (P - T < minDist) { minDist = P - T; bestT = T; }
+                    }
+                }
+                if (bestT !== -1) pairMap.set(`${bestT}-${P}`, { sIdx: bestT, eIdx: P });
+            }
+
+            let cagrCandidates = Array.from(pairMap.values());
+            
+            cagrCandidates.forEach(c => {
+                let days = (timestamps[c.eIdx] - timestamps[c.sIdx]) / 86400;
+                c.cagr = Math.pow(closePrices[c.eIdx] / closePrices[c.sIdx], 365.2425 / days) - 1;
+            });
+
+            cagrCandidates.sort((a, b) => b.cagr - a.cagr);
+
+            let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
+            let cagrTop2Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
+
+            if (cagrCandidates.length > 0) {
+                let win1 = cagrCandidates[0];
+                cagrTop1Obj.valid = true;
+                cagrTop1Obj.cagr = win1.cagr;
+                cagrTop1Obj.startStr = chartLabels[win1.sIdx - firstIdx];
+                cagrTop1Obj.endStr = chartLabels[win1.eIdx - firstIdx];
+                cagrTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[win1.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+
+                for (let i = 1; i < cagrCandidates.length; i++) {
+                    let win2 = cagrCandidates[i];
+                    if (win2.eIdx > win1.sIdx && win2.sIdx < win1.eIdx) {
+                        continue; 
+                    }
+                    cagrTop2Obj.valid = true;
+                    cagrTop2Obj.cagr = win2.cagr;
+                    cagrTop2Obj.startStr = chartLabels[win2.sIdx - firstIdx];
+                    cagrTop2Obj.endStr = chartLabels[win2.eIdx - firstIdx];
+                    cagrTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[win2.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+                    break;
                 }
             }
-            if (bestT !== -1) pairMap.set(`${bestT}-${P}`, { sIdx: bestT, eIdx: P });
+
+            chartDataStore[raw.ticker] = {
+                labels: chartLabels,
+                dataPoints: chartDataPoints,
+                stockName: raw.stockName,
+                top1: top1,
+                top2: top2,
+                cagrTop1: cagrTop1Obj,
+                cagrTop2: cagrTop2Obj
+            };
+
+            return {
+                ticker: raw.ticker, stockName: raw.stockName, firstDateStr, lastDateStr, firstPrice, lastPrice,
+                daysDiff: Math.round(daysDiff), cagr,
+                top1, error: false
+            };
+            
+        } catch (e) {
+            console.error(`[${raw.ticker}] 계산 엔진 에러:`, e);
+            return { ticker: raw.ticker, error: true };
         }
-
-        let cagrCandidates = Array.from(pairMap.values());
-        
-        cagrCandidates.forEach(c => {
-            let days = (timestamps[c.eIdx] - timestamps[c.sIdx]) / 86400;
-            c.cagr = Math.pow(closePrices[c.eIdx] / closePrices[c.sIdx], 365.2425 / days) - 1;
-        });
-
-        cagrCandidates.sort((a, b) => b.cagr - a.cagr);
-
-        let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
-        let cagrTop2Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
-
-        if (cagrCandidates.length > 0) {
-            let win1 = cagrCandidates[0];
-            cagrTop1Obj.valid = true;
-            cagrTop1Obj.cagr = win1.cagr;
-            cagrTop1Obj.startStr = chartLabels[win1.sIdx - firstIdx];
-            cagrTop1Obj.endStr = chartLabels[win1.eIdx - firstIdx];
-            cagrTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[win1.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
-
-            for (let i = 1; i < cagrCandidates.length; i++) {
-                let win2 = cagrCandidates[i];
-                if (win2.eIdx > win1.sIdx && win2.sIdx < win1.eIdx) {
-                    continue; 
-                }
-                cagrTop2Obj.valid = true;
-                cagrTop2Obj.cagr = win2.cagr;
-                cagrTop2Obj.startStr = chartLabels[win2.sIdx - firstIdx];
-                cagrTop2Obj.endStr = chartLabels[win2.eIdx - firstIdx];
-                cagrTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[win2.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
-                break;
-            }
-        }
-
-        chartDataStore[raw.ticker] = {
-            labels: chartLabels,
-            dataPoints: chartDataPoints,
-            stockName: raw.stockName,
-            top1: top1,
-            top2: top2,
-            cagrTop1: cagrTop1Obj,
-            cagrTop2: cagrTop2Obj
-        };
-
-        return {
-            ticker: raw.ticker, stockName: raw.stockName, firstDateStr, lastDateStr, firstPrice, lastPrice,
-            daysDiff: Math.round(daysDiff), cagr,
-            top1, error: false
-        };
     }
 
     function openChartModal(ticker, type) {
@@ -754,19 +765,6 @@
     window.onclick = function(event) {
         const modal = document.getElementById('chartModal');
         if (event.target == modal) closeChartModal();
-    }
-
-    // 🚀 모바일 앱 설치 기능을 위한 서비스 워커 등록 코드 (백그라운드 통과 용)
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('./sw.js')
-                .then(registration => {
-                    console.log('ServiceWorker 등록 성공 (설치 팝업 조건 통과):', registration.scope);
-                })
-                .catch(err => {
-                    console.log('ServiceWorker 등록 실패:', err);
-                });
-        });
     }
 </script>
 
