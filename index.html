@@ -6,6 +6,9 @@
     <title>📈 주식 CAGR & 최장 물림구간 비교</title>
     
     <link rel="icon" href="icon.ico" type="image/x-icon">
+    <link rel="apple-touch-icon" href="icon.png">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#27ae60">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
@@ -233,7 +236,7 @@
         <button id="btnSame" class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
     </div>
 
-    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 최적 구간 탐색 중입니다... ⏳</div>
+    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 딥 밸류 페어링 탐색 중... ⏳</div>
 
     <div class="table-wrapper">
         <table id="resultTable" style="display: none;">
@@ -458,7 +461,7 @@
         const daysDiff = totalDuration / 86400;
         const cagr = daysDiff > 0 ? Math.pow((lastPrice / firstPrice), (365.2425 / daysDiff)) - 1 : 0;
 
-        // --- 1. 최장 물림기간(Drawdown Duration) 분석 (표 표시용 1, 2위) ---
+        // --- 1. 최장 물림기간(Drawdown Duration) 분석 ---
         let drawdowns = [];
         let currentPeakPrice = -1;
         let currentPeakTime = -1;
@@ -507,11 +510,8 @@
         top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
         top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
 
-        // =========================================================================
-        // --- 2. MDD 기반 및 역MDD 기반 후보 쌍(Pairing) 추출 알고리즘 ---
-        // =========================================================================
-
-        // [A] MDD 추출 (왼쪽에서 오른쪽으로 진행하며 신저점 기록)
+        // --- 2. MDD / 역MDD 기반 페어링 최고 수익률 구간 추출 ---
+        // [A] MDD 추출 (왼쪽에서 오른쪽)
         let mdEpisodes = [];
         let pPrice = -1;
         let pIdx = -1;
@@ -534,12 +534,10 @@
         if (pIdx !== -1 && epMinIdx !== -1 && pPrice > epMinP) {
             mdEpisodes.push({ troughIdx: epMinIdx, drop: (pPrice - epMinP) / pPrice });
         }
-        // 낙폭이 큰 순서대로 Top 10 바닥 추출
         mdEpisodes.sort((a, b) => b.drop - a.drop);
         const top10Troughs = mdEpisodes.slice(0, 10).map(ep => ep.troughIdx);
 
-
-        // [B] 역MDD 추출 (오른쪽에서 왼쪽으로 진행하며 신고점 기록)
+        // [B] 역MDD 추출 (오른쪽에서 왼쪽)
         let revEpisodes = [];
         let rMinP = closePrices[lastIdx];
         let rMinIdx = lastIdx;
@@ -548,7 +546,7 @@
 
         for (let i = lastIdx - 1; i >= firstIdx; i--) {
             const price = closePrices[i];
-            if (price <= rMinP) { // 신저점 도달 시 에피소드 마감
+            if (price <= rMinP) {
                 if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) {
                     revEpisodes.push({ peakIdx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
                 }
@@ -562,26 +560,22 @@
         if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) {
             revEpisodes.push({ peakIdx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
         }
-        // 역낙폭이 큰 순서대로 Top 10 꼭지 추출
         revEpisodes.sort((a, b) => b.revMdd - a.revMdd);
         const top10Peaks = revEpisodes.slice(0, 10).map(ep => ep.peakIdx);
 
-
-        // [C] 가장 인접한 둘 끼리 엮어 시나리오 구성
+        // [C] 인접 구간 페어링
         let pairMap = new Map();
         
-        // 1) 각 바닥에 대해 가장 가까운 미래의 꼭지를 매칭
         for (let T of top10Troughs) {
             let bestP = -1; let minDist = Infinity;
             for (let P of top10Peaks) {
-                if (P > T && (timestamps[P] - timestamps[T]) / 86400 >= 365.2425) { // 1년 이상 조건
+                if (P > T && (timestamps[P] - timestamps[T]) / 86400 >= 365.2425) { 
                     if (P - T < minDist) { minDist = P - T; bestP = P; }
                 }
             }
             if (bestP !== -1) pairMap.set(`${T}-${bestP}`, { sIdx: T, eIdx: bestP });
         }
         
-        // 2) 각 꼭지에 대해 가장 가까운 과거의 바닥을 매칭 (상호 보완)
         for (let P of top10Peaks) {
             let bestT = -1; let minDist = Infinity;
             for (let T of top10Troughs) {
@@ -594,13 +588,11 @@
 
         let cagrCandidates = Array.from(pairMap.values());
         
-        // 각 페어의 CAGR 계산
         cagrCandidates.forEach(c => {
             let days = (timestamps[c.eIdx] - timestamps[c.sIdx]) / 86400;
             c.cagr = Math.pow(closePrices[c.eIdx] / closePrices[c.sIdx], 365.2425 / days) - 1;
         });
 
-        // CAGR 기준 내림차순 정렬
         cagrCandidates.sort((a, b) => b.cagr - a.cagr);
 
         let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
@@ -614,12 +606,10 @@
             cagrTop1Obj.endStr = chartLabels[win1.eIdx - firstIdx];
             cagrTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[win1.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
 
-            // 1위와 기간이 겹치지 않는(비수열) 2위를 탐색
             for (let i = 1; i < cagrCandidates.length; i++) {
                 let win2 = cagrCandidates[i];
-                // 겹침 여부 확인: 한 구간의 끝이 다른 구간의 시작보다 작거나 같으면 겹치지 않음
                 if (win2.eIdx > win1.sIdx && win2.sIdx < win1.eIdx) {
-                    continue; // 겹치므로 패스
+                    continue; 
                 }
                 cagrTop2Obj.valid = true;
                 cagrTop2Obj.cagr = win2.cagr;
@@ -661,7 +651,6 @@
 
         const annotations = {};
         
-        // 1) [최장 물림기간] 차트 뷰
         if (type === 'drawdown') {
             title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#e74c3c">최장 물림기간 (고통 구간)</span>`;
             
@@ -688,7 +677,6 @@
                 };
             }
         } 
-        // 2) [MDD 바닥 최적 페어링 - 최고 수익률 CAGR] 차트 뷰
         else if (type === 'cagr') {
             title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">MDD 딥 밸류 페어링 최고 CAGR 구간</span>`;
             
@@ -768,6 +756,18 @@
         if (event.target == modal) closeChartModal();
     }
 
+    // 🚀 모바일 앱 설치 기능을 위한 서비스 워커 등록 코드 (백그라운드 통과 용)
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .then(registration => {
+                    console.log('ServiceWorker 등록 성공 (설치 팝업 조건 통과):', registration.scope);
+                })
+                .catch(err => {
+                    console.log('ServiceWorker 등록 실패:', err);
+                });
+        });
+    }
 </script>
 
 </body>
