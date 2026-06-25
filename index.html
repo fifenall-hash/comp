@@ -6,6 +6,9 @@
     <title>📈 주식 CAGR & 최장 물림구간 비교</title>
     
     <link rel="icon" href="icon.ico" type="image/x-icon">
+    <link rel="apple-touch-icon" href="icon.png">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#27ae60">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
@@ -296,7 +299,6 @@
         ).join('');
     }
 
-    // 💡 3중 프록시 방어막 적용 (서버가 터져도 우회해서 가져옵니다)
     async function fetchRawData(ticker) {
         const now = Math.floor(Date.now() / 1000);
         const past = -2208988800; 
@@ -317,7 +319,7 @@
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 data = await response.json();
                 if (data && data.chart && data.chart.result) {
-                    break; // 성공하면 즉시 반복문 탈출
+                    break; 
                 } else {
                     throw new Error("야후 데이터 응답 오류");
                 }
@@ -408,7 +410,6 @@
             const results = rawDataArray.map(raw => calculateMetrics(raw, commonStartTime));
 
             results.forEach(res => {
-                // 💡 에러 발생 시 명확한 에러 메시지를 화면에 출력합니다.
                 if(res.error) {
                     tbody.innerHTML += `<tr><td><strong>${res.ticker}</strong></td><td colspan="6" style="text-align:center; color:red;"><strong>에러:</strong> ${res.errMsg}</td></tr>`;
                     return;
@@ -454,9 +455,8 @@
         }
     }
 
-    // 💡 연산 엔진 내부도 Try-Catch로 감싸서, 특정 종목 연산이 터져도 전체 앱이 멈추지 않게 보호합니다.
     function calculateMetrics(raw, commonStartTime) {
-        if (raw.error) return raw; // 이미 다운로드에서 실패한 데이터면 그대로 패스
+        if (raw.error) return raw; 
 
         try {
             const timestamps = raw.timestamps;
@@ -530,8 +530,7 @@
             top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
             top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
 
-            // --- 2. MDD / 역MDD 기반 페어링 최고 수익률 구간 추출 ---
-            // [A] MDD 추출 (왼쪽에서 오른쪽)
+            // --- 2. MDD 기반 및 역MDD 기반 후보 쌍(Pairing) 추출 알고리즘 ---
             let mdEpisodes = [];
             let pPrice = -1;
             let pIdx = -1;
@@ -557,8 +556,6 @@
             mdEpisodes.sort((a, b) => b.drop - a.drop);
             const top10Troughs = mdEpisodes.slice(0, 10).map(ep => ep.troughIdx);
 
-
-            // [B] 역MDD 추출 (오른쪽에서 왼쪽)
             let revEpisodes = [];
             let rMinP = closePrices[lastIdx];
             let rMinIdx = lastIdx;
@@ -584,8 +581,6 @@
             revEpisodes.sort((a, b) => b.revMdd - a.revMdd);
             const top10Peaks = revEpisodes.slice(0, 10).map(ep => ep.peakIdx);
 
-
-            // [C] 인접 구간 페어링
             let pairMap = new Map();
             
             for (let T of top10Troughs) {
@@ -619,6 +614,10 @@
 
             let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
             let cagrTop2Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
+
+            // 💡 여기서 에러의 주범이었던 날짜 변수를 제대로 선언합니다!
+            const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
+            const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
 
             if (cagrCandidates.length > 0) {
                 let win1 = cagrCandidates[0];
@@ -781,6 +780,18 @@
     window.onclick = function(event) {
         const modal = document.getElementById('chartModal');
         if (event.target == modal) closeChartModal();
+    }
+
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .then(registration => {
+                    console.log('ServiceWorker 등록 성공 (오프라인 지원):', registration.scope);
+                })
+                .catch(err => {
+                    console.log('ServiceWorker 등록 실패:', err);
+                });
+        });
     }
 </script>
 
