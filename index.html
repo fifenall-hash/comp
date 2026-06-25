@@ -6,9 +6,6 @@
     <title>📈 주식 CAGR & 최장 물림구간 비교</title>
     
     <link rel="icon" href="icon.ico" type="image/x-icon">
-    <link rel="apple-touch-icon" href="icon.ico">
-    <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#27ae60">
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
@@ -213,19 +210,12 @@
             .highlight-drawdown, .highlight-cagr { justify-content: center; flex-direction: column; gap: 5px; }
             .chart-btn { margin-left: 0; }
         }
-        
-        /* 앱 설치 버튼 모바일 반응형 처리 */
-        #installBtn { display: none; background-color: #f39c12; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight: bold; }
-        .header-wrap { display: flex; justify-content: center; align-items: center; gap: 15px; position: relative; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <div class="header-wrap">
-        <h1>📈 주식 CAGR & 최장 물림구간 비교</h1>
-        <button id="installBtn">📱 앱으로 설치</button>
-    </div>
+    <h1>📈 주식 CAGR & 최장 물림구간 비교</h1>
     
     <div class="example-info">
         💡 <strong>예시:</strong> SK하이닉스 <code>000660.KS</code>, 삼성전자 <code>005930.KS</code>, 비트코인 <code>BTC-KRW</code>
@@ -243,7 +233,7 @@
         <button id="btnSame" class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
     </div>
 
-    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. MDD 기반 최적화 탐색 중... ⏳</div>
+    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 최적 구간 탐색 중입니다... ⏳</div>
 
     <div class="table-wrapper">
         <table id="resultTable" style="display: none;">
@@ -503,6 +493,7 @@
         if (currentDrawdownMaxDays > 0) {
             drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
         }
+        
         drawdowns.sort((a, b) => b.days - a.days);
 
         const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
@@ -777,45 +768,6 @@
         if (event.target == modal) closeChartModal();
     }
 
-    // PWA 서비스 워커 등록
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('./sw.js')
-                .then(registration => {
-                    console.log('ServiceWorker 등록 성공! 범위:', registration.scope);
-                })
-                .catch(err => {
-                    console.log('ServiceWorker 등록 실패:', err);
-                });
-        });
-    }
-    
-    // --- PWA 앱 설치 버튼 로직 ---
-    let deferredPrompt;
-    const installBtn = document.getElementById('installBtn');
-
-    window.addEventListener('beforeinstallprompt', (e) => {
-        e.preventDefault();
-        deferredPrompt = e;
-        installBtn.style.display = 'block'; 
-    });
-
-    installBtn.addEventListener('click', async () => {
-        if (deferredPrompt) {
-            deferredPrompt.prompt(); 
-            const { outcome } = await deferredPrompt.userChoice;
-            if (outcome === 'accepted') {
-                console.log('앱 설치가 수락되었습니다.');
-                installBtn.style.display = 'none'; 
-            }
-            deferredPrompt = null;
-        }
-    });
-
-    window.addEventListener('appinstalled', () => {
-        installBtn.style.display = 'none';
-        console.log('PWA 앱이 설치되었습니다');
-    });
 </script>
 
 </body>
