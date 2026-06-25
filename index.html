@@ -213,12 +213,19 @@
             .highlight-drawdown, .highlight-cagr { justify-content: center; flex-direction: column; gap: 5px; }
             .chart-btn { margin-left: 0; }
         }
+        
+        /* 앱 설치 버튼 모바일 반응형 처리 */
+        #installBtn { display: none; background-color: #f39c12; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        .header-wrap { display: flex; justify-content: center; align-items: center; gap: 15px; position: relative; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>📈 주식 CAGR & 최장 물림구간 비교</h1>
+    <div class="header-wrap">
+        <h1>📈 주식 CAGR & 최장 물림구간 비교</h1>
+        <button id="installBtn">📱 앱으로 설치</button>
+    </div>
     
     <div class="example-info">
         💡 <strong>예시:</strong> SK하이닉스 <code>000660.KS</code>, 삼성전자 <code>005930.KS</code>, 비트코인 <code>BTC-KRW</code>
@@ -236,7 +243,7 @@
         <button id="btnSame" class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
     </div>
 
-    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 최적 구간 탐색 중입니다... ⏳</div>
+    <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. MDD 기반 최적화 탐색 중... ⏳</div>
 
     <div class="table-wrapper">
         <table id="resultTable" style="display: none;">
@@ -496,7 +503,6 @@
         if (currentDrawdownMaxDays > 0) {
             drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
         }
-        
         drawdowns.sort((a, b) => b.days - a.days);
 
         const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
@@ -510,68 +516,100 @@
         top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
         top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
 
-        // --- 2. MDD 기반 최고 수익률(CAGR) 스캔 알고리즘 ---
-        let episodes = [];
-        let peakP = -1;
-        let peakI = -1;
+        // =========================================================================
+        // --- 2. MDD 기반 및 역MDD 기반 후보 쌍(Pairing) 추출 알고리즘 ---
+        // =========================================================================
+
+        // [A] MDD 추출 (왼쪽에서 오른쪽으로 진행하며 신저점 기록)
+        let mdEpisodes = [];
+        let pPrice = -1;
+        let pIdx = -1;
         let epMinP = Infinity;
-        let epMinI = -1;
+        let epMinIdx = -1;
 
         for (let i = firstIdx; i <= lastIdx; i++) {
             const price = closePrices[i];
-            
-            if (price >= peakP) {
-                if (peakI !== -1 && epMinI !== -1 && peakP > epMinP) {
-                    const dropPercent = (peakP - epMinP) / peakP;
-                    episodes.push({ troughIdx: epMinI, drop: dropPercent });
+            if (price >= pPrice) {
+                if (pIdx !== -1 && epMinIdx !== -1 && pPrice > epMinP) {
+                    mdEpisodes.push({ troughIdx: epMinIdx, drop: (pPrice - epMinP) / pPrice });
                 }
-                peakP = price;
-                peakI = i;
-                epMinP = price;
-                epMinI = i;
+                pPrice = price; pIdx = i; epMinP = price; epMinIdx = i;
             } else {
                 if (price < epMinP) {
-                    epMinP = price;
-                    epMinI = i;
+                    epMinP = price; epMinIdx = i;
                 }
             }
         }
-        if (peakI !== -1 && epMinI !== -1 && peakP > epMinP) {
-            const dropPercent = (peakP - epMinP) / peakP;
-            episodes.push({ troughIdx: epMinI, drop: dropPercent });
+        if (pIdx !== -1 && epMinIdx !== -1 && pPrice > epMinP) {
+            mdEpisodes.push({ troughIdx: epMinIdx, drop: (pPrice - epMinP) / pPrice });
         }
+        // 낙폭이 큰 순서대로 Top 10 바닥 추출
+        mdEpisodes.sort((a, b) => b.drop - a.drop);
+        const top10Troughs = mdEpisodes.slice(0, 10).map(ep => ep.troughIdx);
 
-        // 낙폭(MDD)이 가장 컸던 순서대로 정렬하여 상위 10개 추출
-        episodes.sort((a, b) => b.drop - a.drop);
-        const top10Troughs = episodes.slice(0, 10).map(ep => ep.troughIdx);
 
-        function getBestCagrFrom(sIdx) {
-            let bCagr = -Infinity;
-            let bIdx = -1;
-            for (let j = sIdx + 1; j <= lastIdx; j++) {
-                const d = (timestamps[j] - timestamps[sIdx]) / 86400;
-                if (d >= 365.2425) { 
-                    const c = Math.pow(closePrices[j] / closePrices[sIdx], 365.2425 / d) - 1;
-                    if (c > bCagr) {
-                        bCagr = c;
-                        bIdx = j;
-                    }
+        // [B] 역MDD 추출 (오른쪽에서 왼쪽으로 진행하며 신고점 기록)
+        let revEpisodes = [];
+        let rMinP = closePrices[lastIdx];
+        let rMinIdx = lastIdx;
+        let rPeakP = closePrices[lastIdx];
+        let rPeakIdx = lastIdx;
+
+        for (let i = lastIdx - 1; i >= firstIdx; i--) {
+            const price = closePrices[i];
+            if (price <= rMinP) { // 신저점 도달 시 에피소드 마감
+                if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) {
+                    revEpisodes.push({ peakIdx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
+                }
+                rMinP = price; rMinIdx = i; rPeakP = price; rPeakIdx = i;
+            } else {
+                if (price > rPeakP) {
+                    rPeakP = price; rPeakIdx = i;
                 }
             }
-            if (bIdx !== -1) {
-                return { valid: true, cagr: bCagr, sIdx: sIdx, eIdx: bIdx };
-            }
-            return { valid: false };
         }
+        if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) {
+            revEpisodes.push({ peakIdx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
+        }
+        // 역낙폭이 큰 순서대로 Top 10 꼭지 추출
+        revEpisodes.sort((a, b) => b.revMdd - a.revMdd);
+        const top10Peaks = revEpisodes.slice(0, 10).map(ep => ep.peakIdx);
 
-        let cagrCandidates = [];
-        for (let tIdx of top10Troughs) {
-            let cand = getBestCagrFrom(tIdx);
-            if (cand.valid) {
-                cagrCandidates.push(cand);
+
+        // [C] 가장 인접한 둘 끼리 엮어 시나리오 구성
+        let pairMap = new Map();
+        
+        // 1) 각 바닥에 대해 가장 가까운 미래의 꼭지를 매칭
+        for (let T of top10Troughs) {
+            let bestP = -1; let minDist = Infinity;
+            for (let P of top10Peaks) {
+                if (P > T && (timestamps[P] - timestamps[T]) / 86400 >= 365.2425) { // 1년 이상 조건
+                    if (P - T < minDist) { minDist = P - T; bestP = P; }
+                }
             }
+            if (bestP !== -1) pairMap.set(`${T}-${bestP}`, { sIdx: T, eIdx: bestP });
         }
         
+        // 2) 각 꼭지에 대해 가장 가까운 과거의 바닥을 매칭 (상호 보완)
+        for (let P of top10Peaks) {
+            let bestT = -1; let minDist = Infinity;
+            for (let T of top10Troughs) {
+                if (P > T && (timestamps[P] - timestamps[T]) / 86400 >= 365.2425) {
+                    if (P - T < minDist) { minDist = P - T; bestT = T; }
+                }
+            }
+            if (bestT !== -1) pairMap.set(`${bestT}-${P}`, { sIdx: bestT, eIdx: P });
+        }
+
+        let cagrCandidates = Array.from(pairMap.values());
+        
+        // 각 페어의 CAGR 계산
+        cagrCandidates.forEach(c => {
+            let days = (timestamps[c.eIdx] - timestamps[c.sIdx]) / 86400;
+            c.cagr = Math.pow(closePrices[c.eIdx] / closePrices[c.sIdx], 365.2425 / days) - 1;
+        });
+
+        // CAGR 기준 내림차순 정렬
         cagrCandidates.sort((a, b) => b.cagr - a.cagr);
 
         let cagrTop1Obj = { valid: false, startStr: '', endStr: '', cagr: 0, labelAlign: 'start' };
@@ -584,19 +622,22 @@
             cagrTop1Obj.startStr = chartLabels[win1.sIdx - firstIdx];
             cagrTop1Obj.endStr = chartLabels[win1.eIdx - firstIdx];
             cagrTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[win1.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
-        }
-        
-        if (cagrCandidates.length > 1) {
-            let win2 = cagrCandidates[1];
-            cagrTop2Obj.valid = true;
-            cagrTop2Obj.cagr = win2.cagr;
-            cagrTop2Obj.startStr = chartLabels[win2.sIdx - firstIdx];
-            cagrTop2Obj.endStr = chartLabels[win2.eIdx - firstIdx];
-            cagrTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[win2.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
-        }
 
-        const firstDateStr = new Date(firstTime * 1000).toISOString().split('T')[0];
-        const lastDateStr = new Date(lastTime * 1000).toISOString().split('T')[0];
+            // 1위와 기간이 겹치지 않는(비수열) 2위를 탐색
+            for (let i = 1; i < cagrCandidates.length; i++) {
+                let win2 = cagrCandidates[i];
+                // 겹침 여부 확인: 한 구간의 끝이 다른 구간의 시작보다 작거나 같으면 겹치지 않음
+                if (win2.eIdx > win1.sIdx && win2.sIdx < win1.eIdx) {
+                    continue; // 겹치므로 패스
+                }
+                cagrTop2Obj.valid = true;
+                cagrTop2Obj.cagr = win2.cagr;
+                cagrTop2Obj.startStr = chartLabels[win2.sIdx - firstIdx];
+                cagrTop2Obj.endStr = chartLabels[win2.eIdx - firstIdx];
+                cagrTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[win2.sIdx] - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
+                break;
+            }
+        }
 
         chartDataStore[raw.ticker] = {
             labels: chartLabels,
@@ -629,6 +670,7 @@
 
         const annotations = {};
         
+        // 1) [최장 물림기간] 차트 뷰
         if (type === 'drawdown') {
             title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#e74c3c">최장 물림기간 (고통 구간)</span>`;
             
@@ -655,8 +697,9 @@
                 };
             }
         } 
+        // 2) [MDD 바닥 최적 페어링 - 최고 수익률 CAGR] 차트 뷰
         else if (type === 'cagr') {
-            title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">MDD 바닥 대비 최고 CAGR 구간</span>`;
+            title.innerHTML = `${chartData.stockName} (${ticker}) 흐름 및 <span style="color:#27ae60">MDD 딥 밸류 페어링 최고 CAGR 구간</span>`;
             
             if (chartData.cagrTop1.valid) {
                 annotations.box1 = {
@@ -746,6 +789,33 @@
                 });
         });
     }
+    
+    // --- PWA 앱 설치 버튼 로직 ---
+    let deferredPrompt;
+    const installBtn = document.getElementById('installBtn');
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        installBtn.style.display = 'block'; 
+    });
+
+    installBtn.addEventListener('click', async () => {
+        if (deferredPrompt) {
+            deferredPrompt.prompt(); 
+            const { outcome } = await deferredPrompt.userChoice;
+            if (outcome === 'accepted') {
+                console.log('앱 설치가 수락되었습니다.');
+                installBtn.style.display = 'none'; 
+            }
+            deferredPrompt = null;
+        }
+    });
+
+    window.addEventListener('appinstalled', () => {
+        installBtn.style.display = 'none';
+        console.log('PWA 앱이 설치되었습니다');
+    });
 </script>
 
 </body>
