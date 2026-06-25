@@ -296,23 +296,46 @@
         ).join('');
     }
 
+    // 💡 3중 프록시 방어막 적용 (서버가 터져도 우회해서 가져옵니다)
     async function fetchRawData(ticker) {
-        try {
-            const now = Math.floor(Date.now() / 1000);
-            const past = -2208988800; 
-            const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?period1=${past}&period2=${now}&interval=1d`;
-            
-            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`;
+        const now = Math.floor(Date.now() / 1000);
+        const past = -2208988800; 
+        const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?period1=${past}&period2=${now}&interval=1d`;
+        
+        const proxies = [
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+            `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooUrl)}`
+        ];
 
-            const response = await fetch(proxyUrl);
-            if (!response.ok) throw new Error(`응답 오류: ${response.status}`);
-            
-            const data = await response.json();
+        let data = null;
+        let lastError = "";
+
+        for (const proxyUrl of proxies) {
+            try {
+                const response = await fetch(proxyUrl);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                data = await response.json();
+                if (data && data.chart && data.chart.result) {
+                    break; // 성공하면 즉시 반복문 탈출
+                } else {
+                    throw new Error("야후 데이터 응답 오류");
+                }
+            } catch (err) {
+                lastError = err.message;
+                data = null;
+            }
+        }
+
+        if (!data) {
+            console.error(`[${ticker}] 다운로드 실패:`, lastError);
+            return { ticker, error: true, errMsg: `통신 차단 (${lastError})` };
+        }
+
+        try {
             const resultObj = data.chart.result[0];
-            
             const metaInfo = resultObj.meta;
             const stockName = metaInfo.shortName || metaInfo.longName || ticker;
-
             const rawTimestamps = resultObj.timestamp || [];
             
             let rawPrices = [];
@@ -325,7 +348,6 @@
             const cleanTimestamps = [];
             const cleanPrices = [];
 
-            // 💡 데이터 오염 방어 1: 날짜(t)와 가격(price)이 완벽하게 정상인 경우만 승인
             for (let i = 0; i < rawTimestamps.length; i++) {
                 const t = rawTimestamps[i];
                 const price = rawPrices[i];
@@ -347,8 +369,7 @@
                 error: false
             };
         } catch (err) {
-            console.error(`[${ticker}] 다운로드 에러:`, err);
-            return { ticker, error: true };
+            return { ticker, error: true, errMsg: "데이터 정제 오류" };
         }
     }
 
@@ -387,8 +408,9 @@
             const results = rawDataArray.map(raw => calculateMetrics(raw, commonStartTime));
 
             results.forEach(res => {
+                // 💡 에러 발생 시 명확한 에러 메시지를 화면에 출력합니다.
                 if(res.error) {
-                    tbody.innerHTML += `<tr><td><strong>${res.ticker}</strong></td><td colspan="6" style="text-align:center; color:red;">데이터를 계산할 수 없습니다.</td></tr>`;
+                    tbody.innerHTML += `<tr><td><strong>${res.ticker}</strong></td><td colspan="6" style="text-align:center; color:red;"><strong>에러:</strong> ${res.errMsg}</td></tr>`;
                     return;
                 }
                 
@@ -422,10 +444,8 @@
                 `;
             });
             table.style.display = 'table';
-            
         } catch (error) {
-            // 💡 팝업 오류 방어: 오류의 상세 내용을 표기하여 추적 가능하도록 수정
-            alert('데이터 처리 중 오류가 발생했습니다: ' + error.message);
+            alert('데이터 처리 중 오류가 발생했습니다.');
             console.error(error);
         } finally {
             btnFull.disabled = false;
@@ -434,10 +454,10 @@
         }
     }
 
+    // 💡 연산 엔진 내부도 Try-Catch로 감싸서, 특정 종목 연산이 터져도 전체 앱이 멈추지 않게 보호합니다.
     function calculateMetrics(raw, commonStartTime) {
-        if (raw.error) return { ticker: raw.ticker, error: true };
-        
-        // 💡 데이터 오염 방어 2: 연산 중 알 수 없는 예외 발생 시 해당 종목만 빨간색(에러) 처리
+        if (raw.error) return raw; // 이미 다운로드에서 실패한 데이터면 그대로 패스
+
         try {
             const timestamps = raw.timestamps;
             const closePrices = raw.closePrices;
@@ -449,9 +469,9 @@
                 }
             }
 
-            if (firstIdx >= closePrices.length) return { ticker: raw.ticker, error: true }; 
+            if (firstIdx >= closePrices.length) return { ticker: raw.ticker, error: true, errMsg: "해당 구간에 데이터가 없습니다." }; 
             const lastIdx = closePrices.length - 1;
-            if (firstIdx >= lastIdx) return { ticker: raw.ticker, error: true }; 
+            if (firstIdx >= lastIdx) return { ticker: raw.ticker, error: true, errMsg: "비교 가능한 기간이 너무 짧습니다." }; 
 
             const firstTime = timestamps[firstIdx]; 
             const lastTime = timestamps[lastIdx];
@@ -497,7 +517,6 @@
             if (currentDrawdownMaxDays > 0) {
                 drawdowns.push({ start: currentPeakTime, end: currentDrawdownLastTime, days: currentDrawdownMaxDays });
             }
-            
             drawdowns.sort((a, b) => b.days - a.days);
 
             const top1 = drawdowns[0] || { start: firstTime, end: firstTime, days: 0 };
@@ -511,11 +530,8 @@
             top1.labelAlign = (totalDuration > 0 && ((top1.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
             top2.labelAlign = (totalDuration > 0 && ((top2.start - firstTime) / totalDuration) > 0.7) ? 'end' : 'start';
 
-            // =========================================================================
-            // --- 2. MDD 기반 및 역MDD 기반 후보 쌍(Pairing) 추출 알고리즘 ---
-            // =========================================================================
-
-            // [A] MDD 추출 (왼쪽에서 오른쪽으로 진행)
+            // --- 2. MDD / 역MDD 기반 페어링 최고 수익률 구간 추출 ---
+            // [A] MDD 추출 (왼쪽에서 오른쪽)
             let mdEpisodes = [];
             let pPrice = -1;
             let pIdx = -1;
@@ -542,7 +558,7 @@
             const top10Troughs = mdEpisodes.slice(0, 10).map(ep => ep.troughIdx);
 
 
-            // [B] 역MDD 추출 (오른쪽에서 왼쪽으로 진행)
+            // [B] 역MDD 추출 (오른쪽에서 왼쪽)
             let revEpisodes = [];
             let rMinP = closePrices[lastIdx];
             let rMinIdx = lastIdx;
@@ -569,7 +585,7 @@
             const top10Peaks = revEpisodes.slice(0, 10).map(ep => ep.peakIdx);
 
 
-            // [C] 가장 인접한 둘 끼리 엮어 시나리오 구성
+            // [C] 인접 구간 페어링
             let pairMap = new Map();
             
             for (let T of top10Troughs) {
@@ -641,10 +657,10 @@
                 daysDiff: Math.round(daysDiff), cagr,
                 top1, error: false
             };
-            
+
         } catch (e) {
-            console.error(`[${raw.ticker}] 계산 엔진 에러:`, e);
-            return { ticker: raw.ticker, error: true };
+            console.error(`[${raw.ticker}] 계산 로직 에러:`, e);
+            return { ticker: raw.ticker, error: true, errMsg: `연산 오류 (${e.message})` };
         }
     }
 
