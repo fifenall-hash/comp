@@ -24,6 +24,8 @@
             --btn-color: #34495e;
             --same-color: #8e44ad;
             --same-hover: #9b59b6;
+            --disp-color: #e67e22;
+            --disp-hover: #d35400;
         }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -113,6 +115,8 @@
         .btn-full:hover { background-color: #2471a3; }
         .btn-same { background-color: var(--same-color); }
         .btn-same:hover { background-color: var(--same-hover); }
+        .btn-disp { background-color: var(--disp-color); }
+        .btn-disp:hover { background-color: var(--disp-hover); }
 
         .chart-btn {
             background-color: var(--btn-color);
@@ -232,8 +236,9 @@
     <div class="ticker-list-container" id="tickerList"></div>
 
     <div class="button-group">
-        <button id="btnFull" class="action-btn btn-full" onclick="processComparison('full')">전체 구간 비교하기</button>
-        <button id="btnSame" class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
+        <button class="action-btn btn-full" onclick="processComparison('full')">전체 구간 비교하기</button>
+        <button class="action-btn btn-same" onclick="processComparison('same')">같은 구간 비교하기</button>
+        <button class="action-btn btn-disp" onclick="showDisparityChart()">1500일 이격도 한눈에 보기</button>
     </div>
 
     <div class="loading" id="loadingIndicator">데이터를 불러오고 계산 중입니다. 최적 구간 탐색 중입니다... ⏳</div>
@@ -377,20 +382,98 @@
         }
     }
 
+    // 💡 새롭게 추가된 [1500일 이격도 한눈에 보기] 로직
+    async function showDisparityChart() {
+        if (tickers.length === 0) {
+            alert('비교할 티커를 최소 1개 이상 입력해주세요.');
+            return;
+        }
+
+        const btns = document.querySelectorAll('.action-btn');
+        btns.forEach(b => b.disabled = true);
+        const loading = document.getElementById('loadingIndicator');
+        loading.innerHTML = '1500일 장기 이격도(Disparity) 분석 중... ⏳';
+        loading.style.display = 'block';
+
+        try {
+            await new Promise(r => setTimeout(r, 50)); 
+            
+            const rawDataArray = await Promise.all(tickers.map(fetchRawData));
+            const datasets = [];
+            
+            // 한 차트 안에서 종목을 구분할 수 있게 다양한 색상 배열 제공
+            const colors = ['#e74c3c', '#3498db', '#f1c40f', '#2ecc71', '#9b59b6', '#e67e22', '#1abc9c', '#34495e'];
+
+            rawDataArray.forEach((raw, index) => {
+                if (raw.error) return;
+                const prices = raw.closePrices;
+                const timestamps = raw.timestamps;
+                
+                // 1500 거래일(약 6년) 치의 데이터가 없는 신생 주식은 이격도 계산 불가
+                if (prices.length < 1500) return; 
+
+                const disparityData = [];
+                let sum = 0;
+                
+                // 초기 1499일 합계
+                for(let i = 0; i < 1499; i++) { sum += prices[i]; }
+
+                // 1500일째부터 슬라이딩 윈도우(Sliding Window)로 이동평균 계산
+                for(let i = 1499; i < prices.length; i++) {
+                    sum += prices[i];
+                    const ma1500 = sum / 1500;
+                    const disparity = (prices[i] / ma1500) * 100;
+                    
+                    disparityData.push({
+                        x: new Date(timestamps[i] * 1000).toISOString().split('T')[0],
+                        y: disparity
+                    });
+                    
+                    // 다음 루프를 위해 맨 앞 데이터를 빼줌
+                    sum -= prices[i - 1499]; 
+                }
+
+                datasets.push({
+                    label: raw.stockName || raw.ticker,
+                    data: disparityData,
+                    borderColor: colors[index % colors.length],
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.1
+                });
+            });
+
+            if (datasets.length === 0) {
+                alert('목록에 1500 거래일(약 6년) 이상 상장된 종목이 없어 차트를 그릴 수 없습니다.');
+                return;
+            }
+
+            // 모달 열기 함수 호출 (이격도 전용)
+            openDisparityModal(datasets);
+
+        } catch (error) {
+            alert('데이터 처리 중 오류가 발생했습니다: ' + error.message);
+            console.error(error);
+        } finally {
+            btns.forEach(b => b.disabled = false);
+            loading.style.display = 'none';
+            loading.innerHTML = '데이터를 불러오고 계산 중입니다. 최적 구간 탐색 중입니다... ⏳'; // 문구 원상복구
+        }
+    }
+
     async function processComparison(mode) {
         if (tickers.length === 0) {
             alert('비교할 티커를 최소 1개 이상 입력해주세요.');
             return;
         }
 
-        const btnFull = document.getElementById('btnFull');
-        const btnSame = document.getElementById('btnSame');
+        const btns = document.querySelectorAll('.action-btn');
+        btns.forEach(b => b.disabled = true);
         const loading = document.getElementById('loadingIndicator');
         const table = document.getElementById('resultTable');
         const tbody = document.getElementById('resultBody');
 
-        btnFull.disabled = true;
-        btnSame.disabled = true;
         loading.style.display = 'block';
         table.style.display = 'none';
         tbody.innerHTML = '';
@@ -451,8 +534,7 @@
             alert('데이터 처리 중 오류가 발생했습니다.');
             console.error(error);
         } finally {
-            btnFull.disabled = false;
-            btnSame.disabled = false;
+            btns.forEach(b => b.disabled = false);
             loading.style.display = 'none';
         }
     }
@@ -529,7 +611,6 @@
             top2.startStr = new Date(top2.start * 1000).toISOString().split('T')[0];
             top2.endStr = new Date(top2.end * 1000).toISOString().split('T')[0];
 
-            // 💡 텍스트 짤림 방지: 구간의 [끝점(end)]이 차트의 50%를 넘어가면 우측으로 글씨가 정렬되도록 개선
             top1.labelAlign = (totalDuration > 0 && ((top1.end - firstTime) / totalDuration) > 0.5) ? 'end' : 'start';
             top2.labelAlign = (totalDuration > 0 && ((top2.end - firstTime) / totalDuration) > 0.5) ? 'end' : 'start';
 
@@ -627,7 +708,6 @@
                 cagrTop1Obj.cagr = win1.cagr;
                 cagrTop1Obj.startStr = chartLabels[win1.sIdx - firstIdx];
                 cagrTop1Obj.endStr = chartLabels[win1.eIdx - firstIdx];
-                // 💡 텍스트 짤림 방지: 구간의 [끝점(end)]이 차트의 50%를 넘어가면 우측으로 글씨가 정렬되도록 개선
                 cagrTop1Obj.labelAlign = (totalDuration > 0 && ((timestamps[win1.eIdx] - firstTime) / totalDuration) > 0.5) ? 'end' : 'start';
 
                 for (let i = 1; i < cagrCandidates.length; i++) {
@@ -639,7 +719,6 @@
                     cagrTop2Obj.cagr = win2.cagr;
                     cagrTop2Obj.startStr = chartLabels[win2.sIdx - firstIdx];
                     cagrTop2Obj.endStr = chartLabels[win2.eIdx - firstIdx];
-                    // 💡 텍스트 짤림 방지: 구간의 [끝점(end)]이 차트의 50%를 넘어가면 우측으로 글씨가 정렬되도록 개선
                     cagrTop2Obj.labelAlign = (totalDuration > 0 && ((timestamps[win2.eIdx] - firstTime) / totalDuration) > 0.5) ? 'end' : 'start';
                     break;
                 }
@@ -667,6 +746,7 @@
         }
     }
 
+    // 💡 개별 종목의 물림/수익 차트를 열어주는 함수
     function openChartModal(ticker, type) {
         const modal = document.getElementById('chartModal');
         const title = document.getElementById('modalTitle');
@@ -771,6 +851,70 @@
                     y: { 
                         type: 'logarithmic',
                         ticks: { callback: function(value) { return '$' + value.toLocaleString(); } }
+                    }
+                }
+            }
+        });
+    }
+
+    // 💡 새롭게 추가된 [1500일 이격도 전용] 차트를 열어주는 함수
+    function openDisparityModal(datasets) {
+        const modal = document.getElementById('chartModal');
+        const title = document.getElementById('modalTitle');
+        const ctx = document.getElementById('priceChart').getContext('2d');
+
+        title.innerHTML = `모든 종목 <span style="color:#e67e22">1500일 이격도</span> 한 눈에 비교`;
+        modal.style.display = 'block';
+
+        if (myChartInstance) {
+            myChartInstance.destroy();
+        }
+
+        myChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: { datasets: datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: {
+                    legend: { 
+                        display: true, 
+                        position: 'bottom'
+                    },
+                    annotation: { 
+                        annotations: {
+                            baseline: {
+                                type: 'line',
+                                yMin: 100,
+                                yMax: 100,
+                                borderColor: 'rgba(231, 76, 60, 0.8)',
+                                borderWidth: 2,
+                                borderDash: [5, 5],
+                                label: {
+                                    display: true,
+                                    content: '이격도 100% (1500일 장기 평균선)',
+                                    position: 'start',
+                                    backgroundColor: 'rgba(231, 76, 60, 0.8)',
+                                    color: 'white',
+                                    font: { size: 12, weight: 'bold' }
+                                }
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { 
+                        type: 'time',
+                        time: { unit: 'year', displayFormats: { year: 'yyyy' } },
+                        ticks: { maxRotation: 0 }
+                    },
+                    y: { 
+                        type: 'linear', // 이격도는 % 수치이므로 일반적인 선형(Linear) 스케일 사용
+                        ticks: { callback: function(value) { return value + '%'; } }
                     }
                 }
             }
