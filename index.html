@@ -286,7 +286,6 @@
 <div id="chartModal" class="modal">
     <div class="modal-content">
         <span class="close-btn" onclick="closeChartModal()">&times;</span>
-        <!-- 💡 제목 부분에 최종 CAGR을 넣을 수 있도록 span 태그를 준비했습니다 -->
         <h2 id="modalTitle" style="color: #2c3e50; margin-top: 0; font-size: 1.3em;">차트 분석</h2>
         <div id="modalBody">
             <div class="chart-container" id="canvasWrapper">
@@ -301,6 +300,8 @@
                             <th>구간 종료일</th>
                             <th>최적의 선택</th>
                             <th>구간 수익률</th>
+                            <!-- 💡 구간 CAGR 열 추가 -->
+                            <th>구간 CAGR</th>
                             <th>누적 수익률</th>
                         </tr>
                     </thead>
@@ -422,7 +423,7 @@
     }
 
     // ==========================================
-    // 💡 1. [최적 시나리오 분석] 구현부
+    // [최적 시나리오 분석] 구현부
     // ==========================================
     async function runOptimalScenario() {
         if (tickers.length === 0) {
@@ -495,7 +496,6 @@
                 revEpisodes.slice(0, nValue).forEach(ep => allKeyTimestamps.add(ts[ep.idx]));
             });
 
-            // 💡 1일(86400초) 이상 간격이 나는 유의미한 날짜들로만 타임라인 재구성
             let rawTimeline = Array.from(allKeyTimestamps).sort((a, b) => a - b);
             let timeline = [rawTimeline[0]];
             for (let i = 1; i < rawTimeline.length; i++) {
@@ -521,11 +521,9 @@
             let mergedHistory = [];
             let capital = 1.0;
             
-            // 💡 신의 포트폴리오용 차트 데이터 (100 시작)
             let chartLabels = [new Date(timeline[0] * 1000).toISOString().split('T')[0]];
             let optimalDataPoints = [100]; 
             
-            // 💡 비교를 위한 기존 개별 종목들의 누적 자산 추적용 배열
             let stockCapitals = validData.map(() => 1.0);
             let stockChartData = validData.map(() => [100]);
 
@@ -546,7 +544,6 @@
                         mult = raw.closePrices[idx2] / raw.closePrices[idx1];
                     }
                     
-                    // 각 개별 종목의 가만히 들고 있었을 때의 누적 자산을 함께 계산합니다
                     stockCapitals[idx] *= mult;
 
                     if (mult > bestMultiplier) {
@@ -561,20 +558,31 @@
                 const startDateStr = new Date(t1 * 1000).toISOString().split('T')[0];
                 const endDateStr = new Date(t2 * 1000).toISOString().split('T')[0];
 
+                // 💡 구간 병합 및 구간 CAGR 계산 로직
                 if (mergedHistory.length > 0 && mergedHistory[mergedHistory.length - 1].choice === bestAsset) {
                     let last = mergedHistory[mergedHistory.length - 1];
                     last.endDate = endDateStr;
+                    last.endTs = t2; // 종료 타임스탬프 업데이트
                     last.mult *= bestMultiplier; 
                     last.ret = (last.mult - 1) * 100;
+                    
+                    const intervalDays = (last.endTs - last.startTs) / 86400;
+                    last.intervalCagr = intervalDays > 0 ? (Math.pow(last.mult, 365.2425 / intervalDays) - 1) * 100 : 0;
                     last.acc = (capital - 1) * 100;
                 } else {
+                    const intervalDays = (t2 - t1) / 86400;
+                    const cagr = intervalDays > 0 ? (Math.pow(bestMultiplier, 365.2425 / intervalDays) - 1) * 100 : 0;
+                    
                     mergedHistory.push({
                         startDate: startDateStr,
                         endDate: endDateStr,
+                        startTs: t1, // 시작 타임스탬프 저장
+                        endTs: t2,   // 종료 타임스탬프 저장
                         choice: bestAsset,
                         isStock: isStock,
                         mult: bestMultiplier,
                         ret: (bestMultiplier - 1) * 100,
+                        intervalCagr: cagr, // 💡 구간 CAGR 저장
                         acc: (capital - 1) * 100
                     });
                 }
@@ -582,17 +590,14 @@
                 chartLabels.push(endDateStr);
                 optimalDataPoints.push(capital * 100);
                 
-                // 개별 종목들 차트 데이터도 추가
                 validData.forEach((raw, idx) => {
                     stockChartData[idx].push(stockCapitals[idx] * 100);
                 });
             }
 
-            // 💡 최종 CAGR 계산
             const totalDays = (timeline[timeline.length - 1] - timeline[0]) / 86400;
             const optimalCagr = totalDays > 0 ? (Math.pow(capital, 365.2425 / totalDays) - 1) * 100 : 0;
 
-            // 모달로 데이터 전송 (개별 종목 정보도 함께 보냄)
             openOptimalModal(mergedHistory, nValue, chartLabels, optimalDataPoints, validData, stockChartData, optimalCagr);
 
         } catch (error) {
@@ -604,7 +609,6 @@
         }
     }
 
-    // 💡 최적 시나리오 결과를 그려주는 함수 (비교선 및 CAGR 포함)
     function openOptimalModal(history, nValue, chartLabels, optimalDataPoints, validData, stockChartData, optimalCagr) {
         const modal = document.getElementById('chartModal');
         const title = document.getElementById('modalTitle');
@@ -613,7 +617,6 @@
         const tbody = document.getElementById('optTableBody');
         const ctx = document.getElementById('priceChart').getContext('2d');
 
-        // 💡 제목에 시나리오 설명과 함께 최종 계산된 CAGR 추가
         const cagrStr = optimalCagr.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
         title.innerHTML = `✨ 신의 포트폴리오 <span style="color:#e74c3c; font-weight:bold;">(최종 CAGR: +${cagrStr}%)</span><br><span style="color:#7f8c8d; font-size:0.7em; font-weight:normal;">Top ${nValue} 구간 매칭 차트 (초기자금 100 기준)</span>`;
         
@@ -622,10 +625,8 @@
         
         if (myChartInstance) myChartInstance.destroy();
 
-        // 차트에 들어갈 데이터셋 구성
         const colors = ['#3498db', '#e74c3c', '#2ecc71', '#9b59b6', '#1abc9c', '#34495e'];
         
-        // 1순위: 신의 포트폴리오 (강조)
         const datasets = [{
             label: `👑 신의 포트폴리오`,
             data: optimalDataPoints,
@@ -638,14 +639,13 @@
             tension: 0.1
         }];
 
-        // 2순위: 개별 존버 종목들 (얇은 점선)
         validData.forEach((raw, idx) => {
             datasets.push({
                 label: raw.stockName || raw.ticker,
                 data: stockChartData[idx],
                 borderColor: colors[idx % colors.length],
                 borderWidth: 1.5,
-                borderDash: [5, 5], // 점선으로 표시하여 비교용임을 알림
+                borderDash: [5, 5], 
                 pointRadius: 0,
                 fill: false,
                 tension: 0.1
@@ -661,36 +661,26 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                interaction: {
-                    mode: 'index',
-                    intersect: false,
-                },
-                plugins: {
-                    legend: { display: true, position: 'bottom' }
-                },
+                interaction: { mode: 'index', intersect: false },
+                plugins: { legend: { display: true, position: 'bottom' } },
                 scales: {
-                    x: { 
-                        type: 'time',
-                        time: { unit: 'year', displayFormats: { year: 'yyyy' } },
-                        ticks: { maxRotation: 0 }
-                    },
-                    y: { 
-                        type: 'logarithmic', // 로그 스케일
-                        ticks: { callback: function(value) { return value.toLocaleString(); } }
-                    }
+                    x: { type: 'time', time: { unit: 'year', displayFormats: { year: 'yyyy' } }, ticks: { maxRotation: 0 } },
+                    y: { type: 'logarithmic', ticks: { callback: function(value) { return value.toLocaleString(); } } }
                 }
             }
         });
 
-        // 표 그리기
         tbody.innerHTML = '';
         if (history.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="6">분석 가능한 구간이 없습니다.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7">분석 가능한 구간이 없습니다.</td></tr>`;
         } else {
             history.forEach((step, idx) => {
                 const choiceClass = step.isStock ? 'stock-choice' : 'cash-choice';
                 const accStr = step.acc.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
                 const retStr = (step.ret > 0 ? '+' : '') + step.ret.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
+                
+                // 💡 구간 CAGR 문자열 포맷팅
+                const intervalCagrStr = (step.intervalCagr > 0 ? '+' : '') + step.intervalCagr.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
                 
                 tbody.innerHTML += `
                     <tr>
@@ -699,6 +689,8 @@
                         <td>${step.endDate}</td>
                         <td class="${choiceClass}">${step.choice}</td>
                         <td style="color: ${step.ret > 0 ? '#c0392b' : '#34495e'}">${retStr}%</td>
+                        <!-- 💡 구간 CAGR 렌더링 -->
+                        <td style="color: ${step.intervalCagr > 0 ? '#c0392b' : '#34495e'}">${intervalCagrStr}%</td>
                         <td style="font-weight: bold; color: #2980b9;">+${accStr}%</td>
                     </tr>
                 `;
