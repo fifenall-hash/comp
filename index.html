@@ -10,6 +10,10 @@
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#27ae60">
 
+    <!-- 💡 초고속 다이렉트 통신(CORS 바이패스) 라이브러리 로드 -->
+    <script src="https://js.puter.com/v2/"></script>
+
+    <!-- Chart.js 및 플러그인 로드 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0"></script>
@@ -300,7 +304,6 @@
                             <th>구간 종료일</th>
                             <th>최적의 선택</th>
                             <th>구간 수익률</th>
-                            <!-- 💡 구간 CAGR 열 추가 -->
                             <th>구간 CAGR</th>
                             <th>누적 수익률</th>
                         </tr>
@@ -347,38 +350,61 @@
         ).join('');
     }
 
+    // 💡 핵심 변경부: 프록시 사이트를 거치지 않는 초고속 다이렉트 CORS 통신 엔진
     async function fetchRawData(ticker) {
         const now = Math.floor(Date.now() / 1000);
         const past = -2208988800; 
         const yahooUrl = `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?period1=${past}&period2=${now}&interval=1d`;
-        
-        const proxies = [
-            `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
-            `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
-            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooUrl)}`
-        ];
 
         let data = null;
         let lastError = "";
 
-        for (const proxyUrl of proxies) {
+        // 1단계: 브라우저 네이티브 직접 fetch 시도
+        try {
+            const directRes = await fetch(yahooUrl);
+            if (directRes.ok) {
+                data = await directRes.json();
+            }
+        } catch (e) {
+            // 브라우저 자체 CORS 차단 발생 시 조용히 2단계로 진행
+        }
+
+        // 2단계: Puter.js를 통한 무제한 CORS-Free 고속 통신 (프록시 서버 지연 없음)
+        if (!data && window.puter && puter.net) {
             try {
-                const response = await fetch(proxyUrl);
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                data = await response.json();
-                if (data && data.chart && data.chart.result) {
-                    break; 
+                const puterRes = await puter.net.fetch(yahooUrl);
+                if (puterRes.ok) {
+                    data = await puterRes.json();
                 } else {
-                    throw new Error("야후 데이터 응답 오류");
+                    throw new Error(`HTTP ${puterRes.status}`);
                 }
             } catch (err) {
                 lastError = err.message;
-                data = null;
             }
         }
 
+        // 3단계: 만약의 네트워크 장애 대비 비상 백업 채널
         if (!data) {
-            return { ticker, error: true, errMsg: `통신 차단 (${lastError})` };
+            const fallbackProxies = [
+                `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+                `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yahooUrl)}`
+            ];
+            for (const pUrl of fallbackProxies) {
+                try {
+                    const fallbackRes = await fetch(pUrl);
+                    if (fallbackRes.ok) {
+                        data = await fallbackRes.json();
+                        if (data && data.chart && data.chart.result) break;
+                    }
+                } catch (err) {
+                    lastError = err.message;
+                }
+            }
+        }
+
+        if (!data || !data.chart || !data.chart.result) {
+            console.error(`[${ticker}] 다운로드 실패:`, lastError);
+            return { ticker, error: true, errMsg: `통신 실패 (${lastError || 'CORS 차단'})` };
         }
 
         try {
@@ -423,7 +449,7 @@
     }
 
     // ==========================================
-    // [최적 시나리오 분석] 구현부
+    // [최적 시나리오 분석]
     // ==========================================
     async function runOptimalScenario() {
         if (tickers.length === 0) {
@@ -491,7 +517,7 @@
                         rPeakP = pr[i]; rPeakIdx = i;
                     }
                 }
-                if (rPeakIdx !== -1 && rPeakP > rMinP) revEpisodes.push({ idx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
+                if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) revEpisodes.push({ idx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
                 revEpisodes.sort((a, b) => b.revMdd - a.revMdd);
                 revEpisodes.slice(0, nValue).forEach(ep => allKeyTimestamps.add(ts[ep.idx]));
             });
@@ -558,11 +584,10 @@
                 const startDateStr = new Date(t1 * 1000).toISOString().split('T')[0];
                 const endDateStr = new Date(t2 * 1000).toISOString().split('T')[0];
 
-                // 💡 구간 병합 및 구간 CAGR 계산 로직
                 if (mergedHistory.length > 0 && mergedHistory[mergedHistory.length - 1].choice === bestAsset) {
                     let last = mergedHistory[mergedHistory.length - 1];
                     last.endDate = endDateStr;
-                    last.endTs = t2; // 종료 타임스탬프 업데이트
+                    last.endTs = t2;
                     last.mult *= bestMultiplier; 
                     last.ret = (last.mult - 1) * 100;
                     
@@ -576,13 +601,13 @@
                     mergedHistory.push({
                         startDate: startDateStr,
                         endDate: endDateStr,
-                        startTs: t1, // 시작 타임스탬프 저장
-                        endTs: t2,   // 종료 타임스탬프 저장
+                        startTs: t1,
+                        endTs: t2,
                         choice: bestAsset,
                         isStock: isStock,
                         mult: bestMultiplier,
                         ret: (bestMultiplier - 1) * 100,
-                        intervalCagr: cagr, // 💡 구간 CAGR 저장
+                        intervalCagr: cagr,
                         acc: (capital - 1) * 100
                     });
                 }
@@ -678,8 +703,6 @@
                 const choiceClass = step.isStock ? 'stock-choice' : 'cash-choice';
                 const accStr = step.acc.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
                 const retStr = (step.ret > 0 ? '+' : '') + step.ret.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
-                
-                // 💡 구간 CAGR 문자열 포맷팅
                 const intervalCagrStr = (step.intervalCagr > 0 ? '+' : '') + step.intervalCagr.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1});
                 
                 tbody.innerHTML += `
@@ -689,7 +712,6 @@
                         <td>${step.endDate}</td>
                         <td class="${choiceClass}">${step.choice}</td>
                         <td style="color: ${step.ret > 0 ? '#c0392b' : '#34495e'}">${retStr}%</td>
-                        <!-- 💡 구간 CAGR 렌더링 -->
                         <td style="color: ${step.intervalCagr > 0 ? '#c0392b' : '#34495e'}">${intervalCagrStr}%</td>
                         <td style="font-weight: bold; color: #2980b9;">+${accStr}%</td>
                     </tr>
@@ -1155,13 +1177,6 @@
     window.onclick = function(event) {
         const modal = document.getElementById('chartModal');
         if (event.target == modal) closeChartModal();
-    }
-
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('./sw.js')
-                .catch(err => console.log('ServiceWorker 등록 실패:', err));
-        });
     }
 </script>
 
