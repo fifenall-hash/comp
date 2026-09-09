@@ -10,10 +10,8 @@
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#27ae60">
 
-    <!-- 💡 초고속 다이렉트 통신(CORS 바이패스) 라이브러리 로드 -->
     <script src="https://js.puter.com/v2/"></script>
 
-    <!-- Chart.js 및 플러그인 로드 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0"></script>
@@ -350,7 +348,6 @@
         ).join('');
     }
 
-    // 💡 핵심 변경부: 프록시 사이트를 거치지 않는 초고속 다이렉트 CORS 통신 엔진
     async function fetchRawData(ticker) {
         const now = Math.floor(Date.now() / 1000);
         const past = -2208988800; 
@@ -359,17 +356,13 @@
         let data = null;
         let lastError = "";
 
-        // 1단계: 브라우저 네이티브 직접 fetch 시도
         try {
             const directRes = await fetch(yahooUrl);
             if (directRes.ok) {
                 data = await directRes.json();
             }
-        } catch (e) {
-            // 브라우저 자체 CORS 차단 발생 시 조용히 2단계로 진행
-        }
+        } catch (e) {}
 
-        // 2단계: Puter.js를 통한 무제한 CORS-Free 고속 통신 (프록시 서버 지연 없음)
         if (!data && window.puter && puter.net) {
             try {
                 const puterRes = await puter.net.fetch(yahooUrl);
@@ -383,7 +376,6 @@
             }
         }
 
-        // 3단계: 만약의 네트워크 장애 대비 비상 백업 채널
         if (!data) {
             const fallbackProxies = [
                 `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
@@ -507,12 +499,14 @@
                 mdEpisodes.sort((a, b) => b.drop - a.drop);
                 mdEpisodes.slice(0, nValue).forEach(ep => allKeyTimestamps.add(ts[ep.idx]));
 
+                // 💡 누락되었던 rMinIdx 복구!
                 let revEpisodes = [];
-                let rMinP = pr[eIdx]; let rPeakP = pr[eIdx]; let rPeakIdx = eIdx;
+                let rMinP = pr[eIdx]; let rMinIdx = eIdx; let rPeakP = pr[eIdx]; let rPeakIdx = eIdx;
                 for (let i = eIdx - 1; i >= sIdx; i--) {
                     if (pr[i] <= rMinP) {
-                        if (rPeakIdx !== -1 && rPeakP > rMinP) revEpisodes.push({ idx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
-                        rMinP = pr[i]; rPeakP = pr[i]; rPeakIdx = i;
+                        if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) revEpisodes.push({ idx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
+                        // 여기서 rMinIdx 갱신
+                        rMinP = pr[i]; rMinIdx = i; rPeakP = pr[i]; rPeakIdx = i;
                     } else if (pr[i] > rPeakP) {
                         rPeakP = pr[i]; rPeakIdx = i;
                     }
@@ -1177,6 +1171,13 @@
     window.onclick = function(event) {
         const modal = document.getElementById('chartModal');
         if (event.target == modal) closeChartModal();
+    }
+
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .catch(err => console.log('ServiceWorker 등록 실패:', err));
+        });
     }
 </script>
 
