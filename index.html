@@ -441,7 +441,7 @@
     }
 
     // ==========================================
-    // [최적 시나리오 분석]
+    // [최적 시나리오 분석] 구현부 업데이트
     // ==========================================
     async function runOptimalScenario() {
         if (tickers.length === 0) {
@@ -469,22 +469,23 @@
                 return;
             }
 
-            const commonStartTime = Math.max(...validData.map(d => d.timestamps[0]));
-            const commonEndTime = Math.min(...validData.map(d => d.timestamps[d.timestamps.length - 1]));
-
+            // 💡 수정: 가장 늦게 시작한 기준(교집합)이 아니라, 모든 종목의 타임라인을 전부 포함(합집합)하도록 변경
             let allKeyTimestamps = new Set();
-            allKeyTimestamps.add(commonStartTime);
-            allKeyTimestamps.add(commonEndTime);
 
             validData.forEach(raw => {
                 const ts = raw.timestamps;
                 const pr = raw.closePrices;
                 
-                let sIdx = 0; while (sIdx < ts.length && ts[sIdx] < commonStartTime) sIdx++;
-                let eIdx = ts.length - 1; while (eIdx >= 0 && ts[eIdx] > commonEndTime) eIdx--;
+                let sIdx = 0; 
+                let eIdx = ts.length - 1; 
 
                 if (sIdx >= eIdx) return;
+                
+                // 각 종목의 최초 상장일과 최신 데이터를 타임라인에 추가
+                allKeyTimestamps.add(ts[sIdx]);
+                allKeyTimestamps.add(ts[eIdx]);
 
+                // MDD 추출
                 let mdEpisodes = [];
                 let pPrice = -1; let epMinP = Infinity; let epMinIdx = -1;
                 for (let i = sIdx; i <= eIdx; i++) {
@@ -499,13 +500,12 @@
                 mdEpisodes.sort((a, b) => b.drop - a.drop);
                 mdEpisodes.slice(0, nValue).forEach(ep => allKeyTimestamps.add(ts[ep.idx]));
 
-                // 💡 누락되었던 rMinIdx 복구!
+                // 역MDD 추출
                 let revEpisodes = [];
                 let rMinP = pr[eIdx]; let rMinIdx = eIdx; let rPeakP = pr[eIdx]; let rPeakIdx = eIdx;
                 for (let i = eIdx - 1; i >= sIdx; i--) {
                     if (pr[i] <= rMinP) {
                         if (rPeakIdx !== -1 && rMinIdx !== -1 && rPeakP > rMinP) revEpisodes.push({ idx: rPeakIdx, revMdd: (rPeakP - rMinP) / rMinP });
-                        // 여기서 rMinIdx 갱신
                         rMinP = pr[i]; rMinIdx = i; rPeakP = pr[i]; rPeakIdx = i;
                     } else if (pr[i] > rPeakP) {
                         rPeakP = pr[i]; rPeakIdx = i;
@@ -516,6 +516,7 @@
                 revEpisodes.slice(0, nValue).forEach(ep => allKeyTimestamps.add(ts[ep.idx]));
             });
 
+            // 최소 1일(86400초) 이상 간격이 나는 타임라인 생성
             let rawTimeline = Array.from(allKeyTimestamps).sort((a, b) => a - b);
             let timeline = [rawTimeline[0]];
             for (let i = 1; i < rawTimeline.length; i++) {
@@ -556,12 +557,18 @@
                 let isStock = false;
 
                 validData.forEach((raw, idx) => {
-                    let idx1 = findClosestIdx(raw.timestamps, t1);
-                    let idx2 = findClosestIdx(raw.timestamps, t2);
+                    // 💡 수정: 해당 구간(t1 ~ t2)에 종목의 상장 데이터가 존재하는지 확인
+                    const stockStart = raw.timestamps[0];
+                    const stockEnd = raw.timestamps[raw.timestamps.length - 1];
                     let mult = 1.0;
 
-                    if (idx1 !== -1 && idx2 !== -1 && idx1 < idx2) {
-                        mult = raw.closePrices[idx2] / raw.closePrices[idx1];
+                    // 여유 시간(약 5일)을 두어 공휴일 등의 오차 방지
+                    if (t1 >= stockStart - 432000 && t2 <= stockEnd + 432000) {
+                        let idx1 = findClosestIdx(raw.timestamps, t1);
+                        let idx2 = findClosestIdx(raw.timestamps, t2);
+                        if (idx1 !== -1 && idx2 !== -1 && idx1 < idx2) {
+                            mult = raw.closePrices[idx2] / raw.closePrices[idx1];
+                        }
                     }
                     
                     stockCapitals[idx] *= mult;
